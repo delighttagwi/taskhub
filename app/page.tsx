@@ -1,212 +1,551 @@
+
 'use client';
 
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useState } from 'react';
 import PwaInstallButton from './PwaInstallButton';
 
-type Profile = { id: string; full_name: string; email: string; phone: string; role: string; status: string };
-type Task = { id: string; name: string; description: string; download_url: string; instructions: string; survey_questions: string[]; reward: number; min_duration_minutes: number; is_active?: boolean };
-type Portal = {
-  profile: Profile; tasks: Task[]; submissions: any[]; balance: number; transactions: any[];
-  chat: string; messages: any[]; settings: { key: string; value: number }[];
-};
-type AdminData = { users: any[]; tasks: Task[]; submissions: any[]; withdrawals: any[]; settings: { key: string; value: number }[]; funding: any[] };
-type Tab = 'overview' | 'tasks' | 'wallet' | 'history' | 'chat' | 'profile' | 'users' | 'reviews' | 'admin-tasks' | 'settings';
-
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { credentials: 'same-origin', ...init });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error ?? 'Something went wrong.');
-  return result as T;
-}
-
-const points = (amount: number) => `${Number(amount || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })} pts`;
-const usdt = (amount: number) => `USDT ${Number(amount || 0).toFixed(2)}`;
-
 export default function Home() {
-  const [portal, setPortal] = useState<Portal | null>(null);
-  const [adminData, setAdminData] = useState<AdminData | null>(null);
-  const [tab, setTab] = useState<Tab>('overview');
-  const [selectedChatUser, setSelectedChatUser] = useState<any>(null);
-  const [adminMessages, setAdminMessages] = useState<any[]>([]);
-  const [reviewRewards, setReviewRewards] = useState<Record<string, string>>({});
   const [authMode, setAuthMode] = useState<'login' | 'register'>('register');
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
-  async function refresh() {
+  async function handleAuth(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    const values = new FormData(event.currentTarget);
+
     try {
-      const data = await request<Portal>('/api/portal');
-      setPortal(data);
-      setError('');
-      if (data.profile.role === 'admin') setAdminData(await request<AdminData>('/api/admin'));
+      const response = await fetch('/api/auth', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: authMode,
+          email: values.get('email'),
+          phone: values.get('phone'),
+          password: values.get('password'),
+          fullName: values.get('fullName'),
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Something went wrong.');
+      }
+
+      setNotice('Account request completed successfully. Please continue.');
+      window.location.reload();
     } catch (issue) {
-      setPortal(null);
-      if (issue instanceof Error && issue.message !== 'Sign in to continue.') setError(issue.message);
+      setError(
+        issue instanceof Error ? issue.message : 'Authentication failed.'
+      );
+    } finally {
+      setBusy(false);
     }
   }
 
-  useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 15000);
-    return () => window.clearInterval(timer);
-  }, []);
+  return (
+    <main className="public-shell">
 
-  useEffect(() => {
-    if (!portal) return;
-    const stream = new EventSource('/api/chat/events');
-    stream.addEventListener('message', () => { void refresh(); if (selectedChatUser) void loadAdminChat(selectedChatUser); });
-    return () => stream.close();
-  }, [portal?.profile.id, selectedChatUser?.id]);
+      <header className="public-nav">
+        <a className="brand" href="#home">
+          <span className="brand-mark">AS</span>
+          <span>
+            APP SURVEY
+            <small>INDEPENDENT APP TESTING</small>
+          </span>
+        </a>
 
-  async function loadAdminChat(user: any) {
-    setSelectedChatUser(user);
-    try {
-      const result = await request<{ messages: any[] }>(`/api/admin/chat?userId=${encodeURIComponent(user.id)}`);
-      setAdminMessages(result.messages);
-    } catch (issue) { setError(issue instanceof Error ? issue.message : 'Could not load conversation.'); }
-  }
+        <div className="public-nav-actions">
+          <PwaInstallButton />
+          <span className="online">
+            <i /> ONLINE
+          </span>
+        </div>
+      </header>
 
-  async function sendAdminMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedChatUser) return;
-    const form = event.currentTarget;
-    const values = new FormData(form);
-    try {
-      await request('/api/admin/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'send', userId: selectedChatUser.id, body: values.get('body') }) });
-      form.reset();
-      await loadAdminChat(selectedChatUser);
-    } catch (issue) { setError(issue instanceof Error ? issue.message : 'Could not send message.'); }
-  }
+      {/* HERO SECTION */}
 
-  async function handleAuth(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError(''); setNotice('');
-    const values = new FormData(event.currentTarget);
-    try {
-      await request('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: authMode, email: values.get('email'), phone: values.get('phone'), password: values.get('password'), fullName: values.get('fullName') }) });
-      await refresh();
-    } catch (issue) { setError(issue instanceof Error ? issue.message : 'Could not sign in.'); }
-    finally { setBusy(false); }
-  }
+      <section className="hero" id="home">
+        <div className="hero-copy">
+          <span className="eyebrow">
+            A better way to try what is next
+          </span>
 
-  async function logout() {
-    await request('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'logout' }) });
-    setPortal(null); setAdminData(null); setTab('overview'); setNotice('You have signed out.');
-  }
+          <h1>
+            Test apps.
+            <br />
+            <em>Earn rewards.</em>
+          </h1>
 
-  async function adminAction(payload: Record<string, unknown>) {
-    setBusy(true); setError(''); setNotice('');
-    const successMessage = payload.action === 'review-submission'
-      ? payload.approve === true ? 'Submission approved; points credited to wallet.' : 'Submission rejected.'
-      : payload.action === 'review-withdrawal'
-        ? payload.approve === true ? 'USDT withdrawal approved.' : 'Withdrawal rejected; points returned.'
-        : 'Changes saved.';
-    try { await request('/api/admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); await refresh(); setNotice(successMessage); }
-    catch (issue) { setError(issue instanceof Error ? issue.message : 'Could not save changes.'); }
-    finally { setBusy(false); }
-  }
+          <p>
+            Discover new apps, share useful feedback, and earn
+            verified rewards for completed testing tasks.
+          </p>
 
-  async function submitForm(event: FormEvent<HTMLFormElement>, endpoint: string, success: string) {
-    event.preventDefault(); setBusy(true); setError(''); setNotice('');
-    try {
-      const form = event.currentTarget;
-      await request(endpoint, { method: 'POST', body: new FormData(form) });
-      form.reset(); await refresh(); setNotice(success);
-    } catch (issue) { setError(issue instanceof Error ? issue.message : 'Could not save this request.'); }
-    finally { setBusy(false); }
-  }
+          <div className="hero-actions">
+            <a className="button primary" href="#join">
+              Create your account <span>↗</span>
+            </a>
 
-  if (!portal) return <main className="public-shell">
-    <header className="public-nav"><a className="brand" href="#home"><span className="brand-mark">AS</span><span>APP SURVEY<small>INDEPENDENT APP TESTING</small></span></a><div className="public-nav-actions"><PwaInstallButton /><span className="online"><i /> ONLINE</span></div></header>
-    <section className="hero" id="home"><div className="hero-copy"><span className="eyebrow">A better way to try what is next</span><h1>Test apps.<br /><em>Earn rewards.</em></h1><p>Discover new apps, share useful feedback, and earn verified rewards for completed testing tasks.</p><div className="hero-actions"><a className="button primary" href="#join">Create your account <span>↗</span></a><a className="text-link" href="#how">How it works <span>↓</span></a></div><div className="trust-note"><span className="checkmark">✓</span> Free registration. No deposit to earn.</div></div><div className="hero-art" aria-label="App testing task preview"><div className="art-top"><span>YOUR NEXT TEST</span><span className="live-dot" /></div><div className="art-icon">a<span>.</span></div><p className="art-label">Task 024 / Mobile apps</p><h2>Everyday, made easier.</h2><p className="art-desc">Explore a new productivity app and share what you think.</p><div className="art-bottom"><span><b>10 min</b><small>TEST TIME</small></span><span><b>50 pts</b><small>REWARD</small></span><span className="art-arrow">↗</span></div><div className="art-stamp">VERIFIED<br />TASK</div></div></section>
-    <section className="how-strip" id="how"><div><span className="step-no">01</span><b>Choose a task</b><small>Find an app worth exploring.</small></div><div><span className="step-no">02</span><b>Test & share</b><small>Follow the brief, send a screenshot.</small></div><div><span className="step-no">03</span><b>Get rewarded</b><small>Approved rewards go to your wallet.</small></div></section>
-    <section className="join-section" id="join"><div className="join-copy"><span className="eyebrow">Your next useful discovery</span><h2>Make your curiosity<br />count.</h2><p>Join a community helping app makers build better products. You only earn when a real testing task is completed and approved.</p><div className="join-foot"><span>01 / 03</span><span>Free to join · English</span></div></div><form className="auth-panel" onSubmit={handleAuth}><div className="auth-heading"><span className="eyebrow">Get started</span><h3>{authMode === 'register' ? 'Create your account' : 'Welcome back'}</h3><p>{authMode === 'register' ? 'Sign up with email and password. Your mobile number stays on your profile.' : 'Sign in with your email and password.'}</p></div>
-      <div className="auth-toggle"><button type="button" className={authMode === 'register' ? 'selected' : ''} onClick={() => { setAuthMode('register'); setError(''); }}>Create account</button><button type="button" className={authMode === 'login' ? 'selected' : ''} onClick={() => { setAuthMode('login'); setError(''); }}>Sign in</button></div>
-      {authMode === 'register' && <label>Full name<input name="fullName" autoComplete="name" placeholder="Your name" required minLength={2} /></label>}
-      <label>Email address<input name="email" type="email" autoComplete="email" placeholder="you@example.com" required /></label>
-      {authMode === 'register' && <label>Mobile number<input name="phone" type="tel" autoComplete="tel" placeholder="+263 771 234 567" required /><small>Kept as your contact number; use international format.</small></label>}
-      <label>Password<input name="password" type="password" autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} minLength={8} placeholder="At least 8 characters" required /></label>
-      {(error || notice) && <p className={error ? 'form-message error' : 'form-message'}>{error || notice}</p>}
-      <button className="button primary full" disabled={busy}>{busy ? 'Please wait…' : authMode === 'register' ? 'Create account' : 'Sign in'} <span>↗</span></button>
-      <p className="legal-note">By continuing, you agree to participate honestly and follow each task’s disclosed terms.</p>
-    </form></section><footer className="public-footer"><span>APP SURVEY <small>© 2026</small></span><span>Test thoughtfully. Earn transparently.</span><a href="#home">Back to top ↑</a></footer>
-  </main>;
-
-  const isAdmin = portal.profile.role === 'admin';
-  const nav: { key: Tab; label: string; icon: string }[] = isAdmin ? [
-    { key: 'overview', label: 'Overview', icon: '◫' }, { key: 'users', label: 'People', icon: '◎' }, { key: 'admin-tasks', label: 'Tasks', icon: '▤' }, { key: 'reviews', label: 'Reviews', icon: '✓' }, { key: 'wallet', label: 'Withdrawals', icon: '↗' }, { key: 'chat', label: 'Private chat', icon: '✳' }, { key: 'settings', label: 'Rewards', icon: '⚙' },
-  ] : [
-    { key: 'overview', label: 'Overview', icon: '◫' }, { key: 'tasks', label: 'Explore tasks', icon: '▤' }, { key: 'wallet', label: 'Wallet', icon: '₮' }, { key: 'history', label: 'History', icon: '◷' }, ...(portal.chat === 'unlocked' ? [{ key: 'chat' as Tab, label: 'Admin chat', icon: '✳' }] : []), { key: 'profile', label: 'Profile', icon: '◎' },
-  ];
-  const pageTitle = nav.find((item) => item.key === tab)?.label ?? 'Overview';
-  const settings = Object.fromEntries([...(adminData?.settings ?? []), ...(portal.settings ?? [])].map((item) => [item.key, item.value]));
-
-  return <div className="app-shell"><aside className="sidebar"><a className="brand side-brand" href="#dashboard"><span className="brand-mark">AS</span><span>APP SURVEY<small>{isAdmin ? 'CONTROL PANEL' : 'TESTING COMMUNITY'}</small></span></a><div className="side-caption">{isAdmin ? 'ADMINISTRATION' : 'WORKSPACE'}</div><nav className="side-nav">{nav.map((item) => <button key={item.key} className={tab === item.key ? 'active' : ''} onClick={() => setTab(item.key)}><span className="nav-icon">{item.icon}</span>{item.label}{item.key === 'reviews' && !!adminData?.submissions.length && <i className="nav-count">{adminData.submissions.length}</i>}</button>)}</nav><div className="sidebar-bottom"><div className="help-box"><span className="help-icon">?</span><b>Need a hand?</b><small>{portal.chat === 'unlocked' ? 'Your admin chat is ready.' : 'Reach out through your account.'}</small></div><button className="profile-mini" onClick={() => setTab(isAdmin ? 'settings' : 'profile')}><span className="avatar">{portal.profile.full_name?.slice(0, 1).toUpperCase() || 'U'}</span><span><b>{portal.profile.full_name}</b><small>{isAdmin ? 'Administrator' : 'Verified account'}</small></span><span className="dots">···</span></button></div></aside>
-    <main className="workspace"><header className="topbar"><div><span className="breadcrumb">{isAdmin ? 'APP SURVEY ADMIN' : 'APP SURVEY'} <span>/</span> {pageTitle}</span><h1>{tab === 'overview' ? isAdmin ? 'Control panel' : 'My dashboard' : pageTitle}</h1></div><div className="top-actions"><span className="status-chip"><i /> {portal.profile.status === 'active' ? 'Account active' : portal.profile.status}</span><PwaInstallButton /><button className="icon-button" title="Refresh dashboard" onClick={() => void refresh()}>↻</button><button className="logout-button" onClick={() => void logout()}>Sign out <span>↗</span></button></div></header>
-      {(error || notice) && <div className={error ? 'toast error' : 'toast'}>{error || notice}<button onClick={() => { setError(''); setNotice(''); }}>×</button></div>}
-      <div className="content">
-        {!isAdmin && tab === 'overview' && <><div className="welcome-row"><div><span className="eyebrow">{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}</span><h2>Good to see you, {portal.profile.full_name.split(' ')[0]}.</h2><p>Ready to find your next app to try?</p></div><button className="button dark" onClick={() => setTab('tasks')}>Explore tasks <span>↗</span></button></div><section className="metrics"><Metric label="Available points" value={points(portal.balance)} detail="Ready to withdraw" accent /><Metric label="Total points earned" value={points(portal.transactions.filter((item) => item.kind === 'task_reward').reduce((sum, item) => sum + Number(item.amount), 0))} detail="From approved tasks" /><Metric label="Pending review" value={String(portal.submissions.filter((item) => item.status === 'pending').length).padStart(2, '0')} detail="Submissions in progress" /><Metric label="Open tasks" value={String(portal.tasks.length).padStart(2, '0')} detail="Ready when you are" /></section><section className="overview-grid"><div className="section-block"><SectionHeading title="Recent activity" action="See history" onAction={() => setTab('history')} />{portal.transactions.length ? <ActivityList items={portal.transactions.slice(0, 4)} /> : <EmptyState title="Your activity starts here" copy="Finish a testing task to see your first reward." />}</div><div className="section-block task-highlight"><SectionHeading title="Picked for you" action="All tasks" onAction={() => setTab('tasks')} />{portal.tasks.slice(0, 2).map((task) => <TaskCompact key={task.id} task={task} onOpen={() => setTab('tasks')} />)}{!portal.tasks.length && <EmptyState title="No open tasks right now" copy="Check back soon for new apps to test." />}</div></section></>}
-        {!isAdmin && tab === 'tasks' && <><div className="page-intro"><span className="eyebrow">A fresh set to explore</span><h2>Available testing tasks</h2><p>Download and test the app, answer its survey, and submit a screenshot. Rewards are credited after admin approval.</p></div><div className="task-list">{portal.tasks.map((task, index) => <article className="task-card" key={task.id}><div className="task-number">{String(index + 1).padStart(2, '0')}</div><div className="task-main"><div className="task-meta"><span>APP TESTING</span><span>{task.min_duration_minutes} MIN</span></div><h3>{task.name}</h3><p>{task.description}</p><a className="download-link" href={task.download_url} target="_blank" rel="noreferrer">Open app link ↗</a><details className="submission-details"><summary>Complete app survey <span>＋</span></summary><p className="instructions">{task.instructions}</p><form className="submit-form" onSubmit={(event) => submitForm(event, '/api/portal', 'Survey and task proof submitted for review.')}><input type="hidden" name="action" value="submit-task" /><input type="hidden" name="taskId" value={task.id} />{(task.survey_questions ?? []).map((question, questionIndex) => <label className="survey-question" key={`${task.id}-${questionIndex}`}>{question}<textarea name={`survey_${questionIndex}`} minLength={2} required placeholder="Your answer" /></label>)}<label>Testing time (minutes)<input type="number" name="duration" min={task.min_duration_minutes} defaultValue={task.min_duration_minutes} required /></label><label>What did you test?<textarea name="details" minLength={10} required placeholder="Share what you explored and noticed…" /></label><label>Screenshot proof<input type="file" name="proof" accept="image/png,image/jpeg,image/webp" required /><small>PNG, JPG or WebP · up to 8 MB</small></label><button className="button dark" disabled={busy}>Send survey for review <span>↗</span></button></form></details></div><div className="task-reward"><span>REWARD</span><b>{points(task.reward)}</b></div></article>)}{!portal.tasks.length && <EmptyState title="No tasks available" copy="There are no active app tests right now. Please check back soon." />}</div></>}
-        {!isAdmin && tab === 'wallet' && <><div className="wallet-hero"><div><span className="eyebrow">Your points, clearly tracked</span><h2>{points(portal.balance)}</h2><p>Available points</p></div><div className="wallet-note"><span className="checkmark">✓</span> Rewards are added after a submission is approved.</div></div><div className="section-block wallet-section"><SectionHeading title="Request a withdrawal" /><p className="subtle">Minimum cash-out: {usdt(Number(settings.minimum_withdrawal ?? 200))}. Rate: {Number(settings.points_per_usdt) > 0 ? points(Number(settings.points_per_usdt)) + " per USDT" : "Unavailable"}. Admin approval is required.</p><form className="withdraw-form" onSubmit={(event) => submitForm(event, '/api/portal', 'Withdrawal request sent for approval.')}><input type="hidden" name="action" value="request-withdrawal" /><label>Amount (USDT)<input type="number" name="amount" min={Number(settings.minimum_withdrawal ?? 200)} step="0.01" max={Number(settings.points_per_usdt) > 0 ? portal.balance / Number(settings.points_per_usdt) : undefined} disabled={Number(settings.points_per_usdt) <= 0} required /></label><label>USDT wallet address or payout details<input name="payoutDetails" minLength={5} placeholder="USDT wallet address" required /></label><button className="button dark" disabled={busy}>Request withdrawal <span>↗</span></button></form></div><div className="section-block"><SectionHeading title="Latest transactions" action="Full history" onAction={() => setTab('history')} /><ActivityList items={portal.transactions.slice(0, 6)} /></div></>}
-        {!isAdmin && tab === 'history' && <><div className="page-intro"><span className="eyebrow">Your account ledger</span><h2>Activity history</h2><p>Rewards and withdrawal activity from your account.</p></div><div className="table-wrap"><table><thead><tr><th>ACTIVITY</th><th>DATE</th><th>STATUS</th><th className="right">AMOUNT</th></tr></thead><tbody>{portal.transactions.map((item) => <tr key={item.id}><td><b>{item.description || (item.kind === 'task_reward' ? 'Task reward' : 'Wallet activity')}</b><small>{item.kind.replaceAll('_', ' ')}</small></td><td>{new Date(item.created_at).toLocaleDateString()}</td><td><Status value="approved" /></td><td className="right amount">{points(item.amount)}</td></tr>)}</tbody></table>{!portal.transactions.length && <EmptyState title="Nothing here yet" copy="Your approved rewards and withdrawal records will appear here." />}</div><div className="section-block"><SectionHeading title="Task submissions" /><div className="submission-history">{portal.submissions.map((item) => <div key={item.id} className="submission-row"><span><b>{item.tasks?.name ?? 'App testing task'}</b><small>{new Date(item.created_at).toLocaleDateString()}</small></span><Status value={item.status} /><span className="amount">{points(item.reward_amount)}</span>{item.decision_reason && <small className="reason">{item.decision_reason}</small>}</div>)}</div></div></>}
-        {!isAdmin && tab === 'chat' && <><div className="page-intro"><span className="eyebrow">PRIVATE SUPPORT</span><h2>Admin chat</h2><p>Messages are visible to you and authorized administrators.</p></div><div className="chat-window"><div className="chat-header"><span className="avatar admin-avatar">AS</span><span><b>APP SURVEY Admin</b><small>Private support</small></span><span className="status-chip"><i /> Available</span></div><div className="messages">{portal.messages.map((message) => <div key={message.id} className={`message ${message.sender_id === portal.profile.id ? 'mine' : ''}`}><p>{message.body}</p><small>{new Date(message.created_at).toLocaleString()}</small></div>)}{!portal.messages.length && <EmptyState title="Start a conversation" copy="Send a message to the APP SURVEY admin team." />}</div><form className="chat-compose" onSubmit={(event) => submitForm(event, '/api/portal', 'Message sent.')}><input type="hidden" name="action" value="send-message" /><input name="body" maxLength={2000} placeholder="Write a message…" required /><button className="button dark" disabled={busy}>Send ↗</button></form></div></>}
-        {!isAdmin && tab === 'profile' && <div className="section-block profile-details"><span className="eyebrow">ACCOUNT DETAILS</span><h2>Your profile</h2><div className="profile-line"><span>Full name</span><b>{portal.profile.full_name}</b></div><div className="profile-line"><span>Email address</span><b>{portal.profile.email}</b></div><div className="profile-line"><span>Mobile number</span><b>{portal.profile.phone}</b></div><div className="profile-line"><span>Account status</span><Status value={portal.profile.status} /></div><div className="profile-line"><span>Chat access</span><Status value={portal.chat} /></div></div>}
-        {isAdmin && tab === 'overview' && <><div className="welcome-row"><div><span className="eyebrow">OPERATIONS / TODAY</span><h2>Good morning, {portal.profile.full_name.split(' ')[0]}.</h2><p>Here is what needs your attention.</p></div><span className="admin-badge">ADMINISTRATOR</span></div><section className="metrics"><Metric label="Registered users" value={String(adminData?.users.length ?? 0).padStart(2, '0')} detail="Latest 200 accounts" accent /><Metric label="Active tasks" value={String(adminData?.tasks.filter((task) => task.is_active).length ?? 0).padStart(2, '0')} detail="Published for testing" /><Metric label="Pending reviews" value={String(adminData?.submissions.length ?? 0).padStart(2, '0')} detail="Awaiting a decision" /><Metric label="Withdrawals" value={String(adminData?.withdrawals.length ?? 0).padStart(2, '0')} detail="Awaiting approval" /></section><section className="overview-grid"><div className="section-block"><SectionHeading title="Review queue" action="View submissions" onAction={() => setTab('reviews')} />{adminData?.submissions.slice(0, 4).map((item) => <div className="admin-queue-row" key={item.id}><span className="avatar">{item.profiles?.full_name?.slice(0, 1) ?? 'U'}</span><span><b>{item.profiles?.full_name}</b><small>{item.tasks?.name} · {new Date(item.created_at).toLocaleDateString()}</small></span><Status value="pending" /></div>)}{!adminData?.submissions.length && <EmptyState title="Queue is clear" copy="New task submissions will show here." />}</div><div className="section-block"><SectionHeading title="Withdrawal requests" action="View all" onAction={() => setTab('wallet')} />{adminData?.withdrawals.slice(0, 4).map((item) => <div className="admin-queue-row" key={item.id}><span className="avatar">₮</span><span><b>{item.profiles?.full_name}</b><small>{item.payout_details}</small></span><b className="amount">{usdt(item.amount)}</b></div>)}{!adminData?.withdrawals.length && <EmptyState title="No requests to review" copy="Withdrawal requests will show here." />}</div></section></>}
-        {isAdmin && tab === 'users' && <><div className="page-intro"><span className="eyebrow">ACCOUNT DIRECTORY</span><h2>People</h2><p>Review account status, earnings and private chat access.</p></div><div className="table-wrap"><table><thead><tr><th>USER</th><th>STATUS</th><th>CHAT ACCESS</th><th>JOINED</th><th>ACTIONS</th></tr></thead><tbody>{adminData?.users.map((user) => <tr key={user.id}><td><b>{user.full_name}</b><small>{user.phone}</small></td><td><Status value={user.status} /></td><td><Status value={user.chat_permissions?.status ?? 'locked'} /></td><td>{new Date(user.created_at).toLocaleDateString()}</td><td><div className="row-actions"><button onClick={() => void adminAction({ action: 'set-chat-access', userId: user.id, unlocked: user.chat_permissions?.status !== 'unlocked' })}>{user.chat_permissions?.status === 'unlocked' ? 'Revoke chat' : 'Promote to chat'}</button><button className="danger-action" onClick={() => void adminAction({ action: 'set-user-status', userId: user.id, suspended: user.status !== 'suspended' })}>{user.status === 'suspended' ? 'Restore' : 'Suspend'}</button></div></td></tr>)}</tbody></table></div></>}
-        {isAdmin && tab === 'admin-tasks' && <><div className="page-intro"><span className="eyebrow">TASK MANAGEMENT</span><h2>Testing tasks</h2><p>Set the app download, survey questions, time, and starting reward. You choose the actual credit during review.</p></div><div className="section-block admin-form-block"><SectionHeading title="Create a task" /><form className="admin-task-form" onSubmit={(event) => { event.preventDefault(); const form = event.currentTarget; const values = new FormData(form); void adminAction({ action: 'create-task', name: values.get('name'), description: values.get('description'), instructions: values.get('instructions'), downloadUrl: values.get('downloadUrl'), reward: values.get('reward'), duration: values.get('duration'), surveyQuestions: String(values.get('surveyQuestions') ?? '').split('\n').map((question) => question.trim()).filter(Boolean) }); form.reset(); }}><label>App or task name<input name="name" required /></label><label>Download link<input name="downloadUrl" type="url" placeholder="https://…" required /></label><label>Description<textarea name="description" required /></label><label>Testing instructions<textarea name="instructions" required /></label><label>App survey questions, one per line<textarea name="surveyQuestions" minLength={5} required placeholder={'How easy was the app to use?\nWhat feature did you find most useful?'} /></label><div className="form-inline"><label>Starting reward (points)<input name="reward" type="number" min="1" defaultValue={settings.reward_per_task ?? 50} required /></label><label>Minimum test time<input name="duration" type="number" min="10" defaultValue="10" required /></label><button className="button dark" disabled={busy}>Publish task <span>↗</span></button></div></form></div><div className="task-list">{adminData?.tasks.map((task) => <article className="task-card" key={task.id}><div className="task-number">↗</div><div className="task-main"><div className="task-meta"><span>{task.is_active ? 'PUBLISHED' : 'PAUSED'}</span><span>{task.min_duration_minutes} MIN</span><span>{task.survey_questions?.length ?? 0} QUESTIONS</span></div><h3>{task.name}</h3><p>{task.description}</p><a className="download-link" href={task.download_url} target="_blank" rel="noreferrer">Open task link ↗</a></div><div className="task-reward"><span>STARTING REWARD</span><b>{points(task.reward)}</b></div></article>)}</div></>}
-        {isAdmin && tab === 'reviews' && <>
-          <div className="page-intro">
-            <span className="eyebrow">SUBMISSION VERIFICATION</span>
-            <h2>Review queue <span className="count-pill">{adminData?.submissions.length ?? 0}</span></h2>
-            <p>Review the app survey and screenshot. Choose the points amount to credit on approval.</p>
+            <a className="text-link" href="#how">
+              How it works <span>↓</span>
+            </a>
           </div>
-          <div className="review-list">
-            {adminData?.submissions.map((item) => <article className="review-card" key={item.id}>
-              <div className="review-image">{item.screenshot_url ? <a href={item.screenshot_url} target="_blank" rel="noreferrer"><img src={item.screenshot_url} alt="Submitted task proof" /></a> : <span>Proof unavailable</span>}</div>
-              <div className="review-content">
-                <div className="task-meta"><span>{item.tasks?.name}</span><Status value="pending" /></div>
-                <h3>{item.profiles?.full_name}</h3>
-                <p>{item.profiles?.phone} · {item.duration_minutes} min tested</p>
-                <div className="survey-answers">{(item.survey_answers ?? []).map((answer: { question: string; answer: string }, answerIndex: number) => <div key={`${item.id}-${answerIndex}`}><b>{answer.question}</b><p>{answer.answer}</p></div>)}</div>
-                <blockquote>{item.details}</blockquote>
-                <div className="review-footer">
-                  <label className="review-credit"><span>Points to award</span><input type="number" min="1" step="1" value={reviewRewards[item.id] ?? String(item.reward_amount)} onChange={(event) => setReviewRewards((current) => ({ ...current, [item.id]: event.target.value }))} /></label>
-                  <div className="row-actions">
-                    <button className="approve-action" disabled={busy} onClick={() => {
-                      const reward = Number(reviewRewards[item.id] ?? item.reward_amount);
-                      if (Number.isSafeInteger(reward) && reward > 0) void adminAction({ action: 'review-submission', id: item.id, approve: true, reward });
-                    }}>Approve & credit</button>
-                    <button className="danger-action" disabled={busy} onClick={() => { const reason = window.prompt('Reason for rejection (shown to user):'); if (reason?.trim()) void adminAction({ action: 'review-submission', id: item.id, approve: false, reason }); }}>Reject</button>
-                  </div>
-                </div>
-              </div>
-            </article>)}
-            {!adminData?.submissions.length && <EmptyState title="All caught up" copy="Pending screenshot submissions will appear here." />}
-          </div>
-        </>}
-        {isAdmin && tab === 'wallet' && <><div className="page-intro"><span className="eyebrow">MANUAL PAYOUT REVIEW</span><h2>Withdrawal requests</h2><p>Confirm the payout details outside the platform before approving a request.</p></div><div className="withdrawal-list">{adminData?.withdrawals.map((item) => <article className="withdrawal-row" key={item.id}><div><span className="eyebrow">{item.profiles?.phone}</span><h3>{item.profiles?.full_name}</h3><p>{item.payout_details}</p></div><b className="amount">{usdt(item.amount)}</b><div className="row-actions"><button className="approve-action" disabled={busy} onClick={() => void adminAction({ action: 'review-withdrawal', id: item.id, approve: true })}>Mark paid</button><button className="danger-action" disabled={busy} onClick={() => { const reason = window.prompt('Reason for rejecting this withdrawal:'); if (reason?.trim()) void adminAction({ action: 'review-withdrawal', id: item.id, approve: false, reason }); }}>Reject</button></div></article>)}{!adminData?.withdrawals.length && <EmptyState title="No pending withdrawals" copy="New requests will appear here for manual review." />}</div></>}
-        {isAdmin && tab === 'chat' && <><div className="page-intro"><span className="eyebrow">PRIVATE SUPPORT</span><h2>Member conversations</h2><p>Only members promoted to private chat appear here.</p></div><div className="admin-chat-layout"><div className="chat-people">{adminData?.users.filter((user) => user.chat_permissions?.status === 'unlocked').map((user) => <button key={user.id} className={selectedChatUser?.id === user.id ? 'selected' : ''} onClick={() => void loadAdminChat(user)}><span className="avatar">{user.full_name?.slice(0, 1)}</span><span><b>{user.full_name}</b><small>{user.phone}</small></span><span>↗</span></button>)}{!adminData?.users.some((user) => user.chat_permissions?.status === 'unlocked') && <EmptyState title="No promoted members" copy="Promote a member from People to enable private chat." />}</div><div className="chat-window admin-chat-window">{selectedChatUser ? <><div className="chat-header"><span className="avatar">{selectedChatUser.full_name?.slice(0, 1)}</span><span><b>{selectedChatUser.full_name}</b><small>{selectedChatUser.phone}</small></span><Status value="unlocked" /></div><div className="messages">{adminMessages.map((message) => <div key={message.id} className={`message ${message.sender_id === portal.profile.id ? 'mine' : ''}`}><p>{message.body}</p><small>{new Date(message.created_at).toLocaleString()}{message.sender_id === portal.profile.id && message.read_at ? ' · Read' : ''}</small></div>)}{!adminMessages.length && <EmptyState title="No messages yet" copy="Start the conversation with this member." />}</div><form className="chat-compose" onSubmit={sendAdminMessage}><input name="body" maxLength={2000} placeholder="Write a message…" required /><button className="button dark">Send ↗</button></form></> : <EmptyState title="Choose a conversation" copy="Select a promoted member to open private chat." />}</div></div></>}
-        {isAdmin && tab === 'settings' && <><div className="page-intro"><span className="eyebrow">REWARD POLICY</span><h2>Reward settings</h2><p>Set defaults for new tasks and establish clear platform limits. Existing task rewards remain unchanged.</p></div><div className="section-block settings-block"><form onSubmit={(event) => { event.preventDefault(); const values = new FormData(event.currentTarget); void adminAction({ action: 'update-settings', reward: values.get('reward'), dailyLimit: values.get('dailyLimit'), minimumWithdrawal: values.get('minimumWithdrawal'), pointsPerUsdt: values.get('pointsPerUsdt') }); }}><label>Default reward per task (points)<input name="reward" type="number" min="1" defaultValue={settings.reward_per_task ?? 50} required /></label><label>Maximum approved tasks per user, per day<input name="dailyLimit" type="number" min="1" step="1" defaultValue={settings.daily_task_limit ?? 5} required /></label><label>Minimum withdrawal (USDT)<input name="minimumWithdrawal" type="number" min="1" defaultValue={settings.minimum_withdrawal ?? 200} required /></label><label>Points per 1 USDT<input name="pointsPerUsdt" type="number" min="0.0001" step="0.0001" defaultValue={Number(settings.points_per_usdt) > 0 ? settings.points_per_usdt : ""} required /></label><div className="settings-summary"><span>Example maximum daily reward</span><b>{points(Number(settings.reward_per_task ?? 50) * Number(settings.daily_task_limit ?? 5))}</b></div><button className="button dark" disabled={busy}>Save reward settings <span>↗</span></button></form></div><div className="section-block settings-block funding-block"><SectionHeading title="Payout funding (backs USDT cash-outs)" /><p className="subtle">Record client/platform funds to cover manual USDT cash-outs. Registration remains free; do not require users to deposit to earn.</p><form onSubmit={(event) => { event.preventDefault(); const values = new FormData(event.currentTarget); void adminAction({ action: 'record-funding', amount: values.get('amount'), note: values.get('note') }); event.currentTarget.reset(); }}><label>Amount received (USDT)<input type="number" name="amount" min="1" step="0.01" required /></label><label>Funding reference<input name="note" minLength={3} placeholder="Invoice or transfer reference" required /></label><button className="button dark" disabled={busy}>Record funding <span>↗</span></button></form><div className="funding-list">{adminData?.funding.map((item, index) => <div key={`${item.created_at}-${index}`}><span>{item.note}<small>{new Date(item.created_at).toLocaleDateString()}</small></span><b>{usdt(item.amount)}</b></div>)}</div></div></>}
-      </div><footer className="workspace-footer"><span>APP SURVEY <small>· {isAdmin ? 'ADMIN' : 'MEMBER'}</small></span><span>Rewards are subject to task terms and approval.</span></footer>
-    </main></div>;
-}
 
-function Metric({ label, value, detail, accent = false }: { label: string; value: string; detail: string; accent?: boolean }) {
-  return <article className={`metric ${accent ? 'metric-accent' : ''}`}><span>{label}</span><b>{value}</b><small>{detail}</small></article>;
-}
-function SectionHeading({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) {
-  return <div className="section-heading"><h3>{title}</h3>{action && <button onClick={onAction}>{action} <span>↗</span></button>}</div>;
-}
-function EmptyState({ title, copy }: { title: string; copy: string }) {
-  return <div className="empty-state"><span>↗</span><b>{title}</b><p>{copy}</p></div>;
-}
-function Status({ value }: { value: string }) {
-  const normalized = value.toLowerCase();
-  return <span className={`status status-${normalized}`}>{value.replaceAll('_', ' ')}</span>;
-}
-function ActivityList({ items }: { items: any[] }) {
-  return <div className="activity-list">{items.map((item) => <div className="activity-row" key={item.id}><span className="activity-icon">{item.kind === 'task_reward' ? '✓' : '↗'}</span><span><b>{item.description || item.kind.replaceAll('_', ' ')}</b><small>{new Date(item.created_at).toLocaleDateString()}</small></span><span className="activity-amount">{points(item.amount)}</span></div>)}</div>;
-}
-function TaskCompact({ task, onOpen }: { task: Task; onOpen: () => void }) {
-  return <button className="compact-task" onClick={onOpen}><span className="compact-icon">AS</span><span><b>{task.name}</b><small>{task.min_duration_minutes} min · app testing</small></span><strong>{points(task.reward)}</strong><span>↗</span></button>;
+          <div className="trust-note">
+            <span className="checkmark">✓</span>
+            5 USDT registration fee. Payment requested after
+            your first approved task.
+          </div>
+        </div>
+
+        <div className="hero-art">
+          <div className="art-top">
+            <span>YOUR NEXT TEST</span>
+            <span className="live-dot" />
+          </div>
+
+          <div className="art-icon">a<span>.</span></div>
+
+          <p className="art-label">Task 024 / Mobile apps</p>
+
+          <h2>Everyday, made easier.</h2>
+
+          <p className="art-desc">
+            Explore a new productivity app and share what you think.
+          </p>
+
+          <div className="art-bottom">
+            <span>
+              <b>10 min</b>
+              <small>TEST TIME</small>
+            </span>
+
+            <span>
+              <b>50 pts</b>
+              <small>REWARD</small>
+            </span>
+
+            <span className="art-arrow">↗</span>
+          </div>
+
+          <div className="art-stamp">
+            VERIFIED
+            <br />
+            TASK
+          </div>
+        </div>
+      </section>
+
+      {/* HOW IT WORKS */}
+
+      <section className="how-strip" id="how">
+        <div>
+          <span className="step-no">01</span>
+          <b>Choose a task</b>
+          <small>Find an app worth exploring.</small>
+        </div>
+
+        <div>
+          <span className="step-no">02</span>
+          <b>Test & share</b>
+          <small>Follow the brief and upload proof.</small>
+        </div>
+
+        <div>
+          <span className="step-no">03</span>
+          <b>Get rewarded</b>
+          <small>Approved rewards go to your wallet.</small>
+        </div>
+      </section>
+
+      {/* REGISTRATION AND PAYMENT INFORMATION */}
+
+      <section className="payment-info-section">
+        <div className="payment-info-card">
+
+          <span className="eyebrow">
+            HOW MEMBERSHIP WORKS
+          </span>
+
+          <h2>
+            Start testing before payment.
+          </h2>
+
+          <p>
+            Create your account and complete your first app-testing
+            task. Once your submission is approved, private admin
+            chat becomes available.
+          </p>
+
+          <div className="payment-steps">
+
+            <div>
+              <span>01</span>
+              <b>Create an account</b>
+              <small>
+                Registration is open. No upfront payment required.
+              </small>
+            </div>
+
+            <div>
+              <span>02</span>
+              <b>Complete your first task</b>
+              <small>
+                Test an app, answer the survey and upload
+                screenshot proof.
+              </small>
+            </div>
+
+            <div>
+              <span>03</span>
+              <b>Unlock admin chat</b>
+              <small>
+                After your first task is approved, private
+                administrator chat becomes available.
+              </small>
+            </div>
+
+            <div>
+              <span>04</span>
+              <b>Submit payment proof</b>
+              <small>
+                The administrator provides the 5 USDT payment
+                details privately. Attach your payment receipt
+                in chat for verification.
+              </small>
+            </div>
+
+          </div>
+
+          <div className="payment-fee">
+            <span>REGISTRATION FEE</span>
+            <strong>5 USDT</strong>
+            <small>
+              Payment requested after first task approval.
+              No payment required to create an account.
+            </small>
+          </div>
+
+        </div>
+      </section>
+
+      {/* REGISTRATION FORM */}
+
+      <section className="join-section" id="join">
+
+        <div className="join-copy">
+          <span className="eyebrow">
+            Your next useful discovery
+          </span>
+
+          <h2>
+            Make your curiosity
+            <br />
+            count.
+          </h2>
+
+          <p>
+            Join a community helping app makers build better
+            products. Complete your first testing task and
+            unlock private administrator support.
+          </p>
+
+          <div className="join-foot">
+            <span>01 / 03</span>
+            <span>5 USDT REGISTRATION FEE · PAYMENT AFTER FIRST TASK APPROVAL</span>
+          </div>
+        </div>
+
+        <form className="auth-panel" onSubmit={handleAuth}>
+
+          <div className="auth-heading">
+            <span className="eyebrow">Get started</span>
+
+            <h3>
+              {authMode === 'register'
+                ? 'Create your account'
+                : 'Welcome back'}
+            </h3>
+
+            <p>
+              {authMode === 'register'
+                ? 'Sign up with email and password. Your mobile number stays on your profile.'
+                : 'Sign in with your email and password.'}
+            </p>
+          </div>
+
+          <div className="registration-notice">
+            <span>REGISTRATION FEE</span>
+            <b>5 USDT</b>
+            <small>
+              Payment is requested after your first approved task.
+              You can register now without paying.
+            </small>
+          </div>
+
+          <div className="auth-toggle">
+            <button
+              type="button"
+              className={authMode === 'register' ? 'selected' : ''}
+              onClick={() => {
+                setAuthMode('register');
+                setError('');
+              }}
+            >
+              Create account
+            </button>
+
+            <button
+              type="button"
+              className={authMode === 'login' ? 'selected' : ''}
+              onClick={() => {
+                setAuthMode('login');
+                setError('');
+              }}
+            >
+              Sign in
+            </button>
+          </div>
+
+          {authMode === 'register' && (
+            <label>
+              Full name
+              <input
+                name="fullName"
+                autoComplete="name"
+                placeholder="Your name"
+                required
+                minLength={2}
+              />
+            </label>
+          )}
+
+          <label>
+            Email address
+            <input
+              name="email"
+              type="email"
+              autoComplete="email"
+              placeholder="you@example.com"
+              required
+            />
+          </label>
+
+          {authMode === 'register' && (
+            <label>
+              Mobile number
+              <input
+                name="phone"
+                type="tel"
+                autoComplete="tel"
+                placeholder="+263 771 234 567"
+                required
+              />
+              <small>
+                Use international format.
+              </small>
+            </label>
+          )}
+
+          <label>
+            Password
+            <input
+              name="password"
+              type="password"
+              autoComplete={
+                authMode === 'register'
+                  ? 'new-password'
+                  : 'current-password'
+              }
+              minLength={8}
+              placeholder="At least 8 characters"
+              required
+            />
+          </label>
+
+          {(error || notice) && (
+            <p className={error ? 'form-message error' : 'form-message'}>
+              {error || notice}
+            </p>
+          )}
+
+          <button
+            className="button primary full"
+            disabled={busy}
+          >
+            {busy
+              ? 'Please wait…'
+              : authMode === 'register'
+                ? 'Create account'
+                : 'Sign in'}
+
+            <span>↗</span>
+          </button>
+
+          <p className="legal-note">
+            By continuing, you agree to participate honestly
+            and follow each task's disclosed terms.
+          </p>
+
+        </form>
+      </section>
+
+      {/* FOOTER */}
+
+      <footer className="public-footer">
+        <span>
+          APP SURVEY <small>© 2026</small>
+        </span>
+
+        <span>
+          Test thoughtfully. Earn transparently.
+        </span>
+
+        <a href="#home">Back to top ↑</a>
+      </footer>
+
+      {/* COMPONENT STYLES */}
+
+      <style jsx>{`
+
+        .payment-info-section {
+          padding: 70px 7%;
+          background: #f7f8f5;
+        }
+
+        .payment-info-card {
+          max-width: 1100px;
+          margin: auto;
+          padding: 45px;
+          background: #fff;
+          border: 1px solid #e7e9e4;
+          border-radius: 20px;
+        }
+
+        .payment-info-card h2 {
+          font-size: 34px;
+          margin: 15px 0;
+          color: #17251e;
+        }
+
+        .payment-info-card > p {
+          max-width: 650px;
+          color: #727b74;
+          line-height: 1.8;
+        }
+
+        .payment-steps {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 25px;
+          margin-top: 35px;
+        }
+
+        .payment-steps > div {
+          padding: 22px;
+          background: #f7f9f6;
+          border-radius: 13px;
+        }
+
+        .payment-steps span {
+          display: block;
+          color: #27945c;
+          font-weight: 800;
+          margin-bottom: 12px;
+        }
+
+        .payment-steps b {
+          display: block;
+          color: #17251e;
+          margin-bottom: 8px;
+        }
+
+        .payment-steps small {
+          color: #778078;
+          line-height: 1.6;
+        }
+
+        .payment-fee {
+          margin-top: 30px;
+          padding: 25px;
+          background: #17251e;
+          border-radius: 14px;
+          color: white;
+        }
+
+        .payment-fee span,
+        .payment-fee strong,
+        .payment-fee small {
+          display: block;
+        }
+
+        .payment-fee strong {
+          font-size: 36px;
+          margin: 8px 0;
+        }
+
+        .payment-fee small {
+          color: #c3d0c6;
+        }
+
+        .registration-notice {
+          padding: 18px;
+          margin: 20px 0;
+          border-radius: 12px;
+          background: #f1f7f2;
+          border: 1px solid #dceadd;
+        }
+
+        .registration-notice span,
+        .registration-notice b,
+        .registration-notice small {
+          display: block;
+        }
+
+        .registration-notice span {
+          color: #568267;
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .registration-notice b {
+          font-size: 25px;
+          color: #17251e;
+          margin: 5px 0;
+        }
+
+        .registration-notice small {
+          color: #65736a;
+          line-height: 1.6;
+        }
+
+        @media (max-width: 650px) {
+          .payment-info-section {
+            padding: 40px 5%;
+          }
+
+          .payment-info-card {
+            padding: 25px 18px;
+          }
+
+          .payment-info-card h2 {
+            font-size: 27px;
+          }
+
+          .payment-steps {
+            grid-template-columns: 1fr;
+          }
+        }
+
+      `}</style>
+
+    </main>
+  );
 }
