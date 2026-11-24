@@ -25,6 +25,7 @@ create table if not exists public.tasks (
   description text not null,
   download_url text not null check (download_url like 'https://%'),
   instructions text not null,
+  survey_questions jsonb not null default '[]'::jsonb check (jsonb_typeof(survey_questions) = 'array'),
   reward numeric(12,2) not null check (reward > 0),
   min_duration_minutes integer not null default 10 check (min_duration_minutes >= 10),
   is_active boolean not null default true,
@@ -37,6 +38,7 @@ create table if not exists public.submissions (
   task_id uuid not null references public.tasks(id),
   screenshot_path text not null,
   details text not null,
+  survey_answers jsonb not null default '[]'::jsonb check (jsonb_typeof(survey_answers) = 'array'),
   duration_minutes integer not null check (duration_minutes >= 10),
   reward_amount numeric(12,2) not null check (reward_amount > 0),
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
@@ -166,18 +168,21 @@ begin
 end;
 $$;
 
-create or replace function public.review_submission(p_admin_id uuid, p_submission_id uuid, p_approve boolean, p_reason text default '')
+create or replace function public.review_submission(p_admin_id uuid, p_submission_id uuid, p_approve boolean, p_reason text default '', p_reward_amount numeric default null)
 returns void language plpgsql security definer set search_path = public, pg_temp as $$
 declare
   v_submission public.submissions%rowtype;
   v_daily_limit integer;
   v_funded numeric(12,2);
   v_paid numeric(12,2);
+  v_reward numeric(12,2);
 begin
   if not public.is_app_admin(p_admin_id) then raise exception 'Administrator access required.'; end if;
   select * into v_submission from public.submissions where id = p_submission_id for update;
   if not found or v_submission.status <> 'pending' then raise exception 'Submission is no longer pending.'; end if;
   if p_approve then
+    v_reward := coalesce(p_reward_amount, v_submission.reward_amount);
+    if v_reward <= 0 then raise exception 'Reward amount must be positive.'; end if;
     perform 1 from public.wallets where user_id = v_submission.user_id for update;
     if not exists (select 1 from public.profiles where id = v_submission.user_id and status = 'active' and role = 'user') then
       raise exception 'Active user account required.';
@@ -189,10 +194,10 @@ begin
     perform 1 from public.funding_ledger order by created_at limit 1 for update;
     select coalesce(sum(amount), 0) into v_funded from public.funding_ledger;
     select coalesce(sum(amount), 0) into v_paid from public.transactions where kind = 'task_reward';
-    if v_submission.reward_amount > v_funded - v_paid then raise exception 'Not enough recorded platform funding for this reward.'; end if;
-    update public.submissions set status = 'approved', decided_by = p_admin_id, decided_at = now(), decision_reason = null where id = p_submission_id;
+    if v_reward > v_funded - v_paid then raise exception 'Not enough recorded platform funding for this reward.'; end if;
+    update public.submissions set status = 'approved', reward_amount = v_reward, decided_by = p_admin_id, decided_at = now(), decision_reason = null where id = p_submission_id;
     insert into public.transactions(user_id, kind, amount, description, submission_id)
-      values (v_submission.user_id, 'task_reward', v_submission.reward_amount, 'Approved app testing task', p_submission_id);
+      values (v_submission.user_id, 'task_reward', v_reward, 'Approved app testing task', p_submission_id);
   else
     if length(trim(coalesce(p_reason, ''))) < 3 then raise exception 'Add a clear reason for rejecting this submission.'; end if;
     update public.submissions set status = 'rejected', decided_by = p_admin_id, decided_at = now(), decision_reason = trim(p_reason) where id = p_submission_id;
@@ -278,11 +283,11 @@ grant select on public.profiles, public.wallets, public.tasks, public.submission
   public.withdrawals, public.chat_permissions, public.messages, public.settings, public.funding_ledger to authenticated;
 grant select on public.wallet_balances to authenticated;
 revoke all on function public.request_withdrawal(uuid, numeric, text) from public, anon, authenticated;
-revoke all on function public.review_submission(uuid, uuid, boolean, text) from public, anon, authenticated;
+revoke all on function public.review_submission(uuid, uuid, boolean, text, numeric) from public, anon, authenticated;
 revoke all on function public.review_withdrawal(uuid, uuid, boolean, text) from public, anon, authenticated;
 revoke all on function public.record_platform_funding(uuid, numeric, text) from public, anon, authenticated;
 grant execute on function public.request_withdrawal(uuid, numeric, text) to service_role;
-grant execute on function public.review_submission(uuid, uuid, boolean, text) to service_role;
+grant execute on function public.review_submission(uuid, uuid, boolean, text, numeric) to service_role;
 grant execute on function public.review_withdrawal(uuid, uuid, boolean, text) to service_role;
 grant execute on function public.record_platform_funding(uuid, numeric, text) to service_role;
 

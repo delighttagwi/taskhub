@@ -7,7 +7,7 @@ export async function GET() {
   if (!profile) return jsonError('Sign in to continue.', 401);
   const db = getAdminClient();
   const [tasks, submissions, wallet, transactions, permission, messages] = await Promise.all([
-    db.from('tasks').select('id, name, description, download_url, instructions, reward, min_duration_minutes').eq('is_active', true).order('created_at', { ascending: false }),
+    db.from('tasks').select('id, name, description, download_url, instructions, reward, min_duration_minutes, survey_questions').eq('is_active', true).order('created_at', { ascending: false }),
     db.from('submissions').select('id, task_id, status, reward_amount, decision_reason, created_at, tasks(name)').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(10),
     db.from('wallet_balances').select('balance').eq('user_id', profile.id).maybeSingle(),
     db.from('transactions').select('id, kind, amount, description, created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(10),
@@ -45,10 +45,16 @@ export async function POST(request: Request) {
     const proof = form.get('proof');
     if (!(proof instanceof File) || proof.size < 1 || proof.size > 8 * 1024 * 1024) return jsonError('Upload a screenshot no larger than 8 MB.');
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(proof.type)) return jsonError('Screenshot must be a PNG, JPG or WebP image.');
-    const { data: task, error: taskError } = await db.from('tasks').select('id, reward, min_duration_minutes').eq('id', taskId).eq('is_active', true).single();
+    const { data: task, error: taskError } = await db.from('tasks').select('id, reward, min_duration_minutes, survey_questions').eq('id', taskId).eq('is_active', true).single();
     if (taskError || !task) return jsonError('This task is no longer available.', 404);
     if (duration < task.min_duration_minutes) return jsonError(`This task requires at least ${task.min_duration_minutes} minutes of testing.`);
     if (details.length < 10) return jsonError('Add a few details about your testing session.');
+    const questions = Array.isArray(task.survey_questions) ? task.survey_questions as string[] : [];
+    const surveyAnswers = questions.map((question, index) => ({
+      question,
+      answer: String(form.get(`survey_${index}`) ?? '').trim(),
+    }));
+    if (surveyAnswers.some(({ answer }) => answer.length < 2)) return jsonError('Answer each app survey question before submitting.');
 
     const extension = proof.type === 'image/jpeg' ? 'jpg' : proof.type.split('/')[1];
     const path = `${profile.id}/${crypto.randomUUID()}.${extension}`;
@@ -56,7 +62,7 @@ export async function POST(request: Request) {
     if (uploadError) return jsonError('Screenshot upload failed. Try again.', 500);
     const { error } = await db.from('submissions').insert({
       user_id: profile.id, task_id: task.id, screenshot_path: path, details,
-      duration_minutes: duration, reward_amount: task.reward,
+      duration_minutes: duration, reward_amount: task.reward, survey_answers: surveyAnswers,
     });
     if (error) {
       await db.storage.from('proofs').remove([path]);

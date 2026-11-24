@@ -15,7 +15,7 @@ export async function GET() {
   const [users, tasks, submissions, withdrawals, settings, funding, earnings] = await Promise.all([
     db.from('profiles').select('id, full_name, email, phone, role, status, created_at, chat_permissions!chat_permissions_user_id_fkey(status)').order('created_at', { ascending: false }).limit(200),
     db.from('tasks').select('*').order('created_at', { ascending: false }),
-    db.from('submissions').select('id, user_id, task_id, screenshot_path, details, duration_minutes, reward_amount, status, created_at, profiles!submissions_user_id_fkey(full_name, email, phone), tasks(name)').eq('status', 'pending').order('created_at', { ascending: true }),
+    db.from('submissions').select('id, user_id, task_id, screenshot_path, details, survey_answers, duration_minutes, reward_amount, status, created_at, profiles!submissions_user_id_fkey(full_name, email, phone), tasks(name)').eq('status', 'pending').order('created_at', { ascending: true }),
     db.from('withdrawals').select('id, user_id, amount, payout_details, status, created_at, profiles!withdrawals_user_id_fkey(full_name, email, phone)').eq('status', 'pending').order('created_at', { ascending: true }),
     db.from('settings').select('key, value'),
     db.from('funding_ledger').select('amount, note, created_at').order('created_at', { ascending: false }).limit(50),
@@ -46,18 +46,24 @@ export async function POST(request: Request) {
     const downloadUrl = String(body.downloadUrl ?? '').trim();
     const reward = Number(body.reward);
     const duration = Number(body.duration ?? 10);
+    const surveyQuestions = Array.isArray(body.surveyQuestions)
+      ? body.surveyQuestions.map((question: unknown) => String(question).trim()).filter(Boolean)
+      : [];
     try {
       if (new URL(downloadUrl).protocol !== 'https:') return jsonError('Task links must use HTTPS.');
     } catch { return jsonError('Enter a valid HTTPS task link.'); }
     if (name.length < 2 || !description || !instructions || !Number.isFinite(reward) || reward <= 0 || !Number.isInteger(duration) || duration < 10) return jsonError('Complete the task details with a reward and at least 10 minutes of testing.');
-    const { error } = await db.from('tasks').insert({ name, description, instructions, download_url: downloadUrl, reward, min_duration_minutes: duration });
+    if (surveyQuestions.length < 1 || surveyQuestions.length > 20 || surveyQuestions.some((question: string) => question.length < 5 || question.length > 300)) return jsonError('Add 1 to 20 survey questions, each between 5 and 300 characters.');
+    const { error } = await db.from('tasks').insert({ name, description, instructions, download_url: downloadUrl, reward, min_duration_minutes: duration, survey_questions: surveyQuestions });
     if (error) return jsonError('Could not create the task.');
     return Response.json({ ok: true });
   }
 
   if (action === 'review-submission') {
+    const reward = body.approve === true ? Number(body.reward) : null;
+    if (reward !== null && (!Number.isFinite(reward) || reward <= 0)) return jsonError('Enter a positive USDT reward to credit.');
     const { error } = await db.rpc('review_submission', {
-      p_admin_id: admin.id, p_submission_id: String(body.id), p_approve: body.approve === true, p_reason: String(body.reason ?? '').trim(),
+      p_admin_id: admin.id, p_submission_id: String(body.id), p_approve: body.approve === true, p_reason: String(body.reason ?? '').trim(), p_reward_amount: reward,
     });
     if (error) return jsonError(error.message);
     return Response.json({ ok: true });

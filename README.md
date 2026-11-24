@@ -2,6 +2,8 @@
 
 APP SURVEY is a Next.js web app with email-and-password authentication, USDT-denominated rewards and withdrawals, member and admin portals, private screenshot submissions, a funded rewards ledger, and admin-promoted private messaging. Mobile numbers remain required contact details on signup.
 
+The site includes a PWA manifest, install icon, service worker, and an install button. Install prompts are browser-controlled and appear only when supported; on iOS, use Share > Add to Home Screen. Install features require HTTPS or localhost.
+
 ## Requirements
 
 - Node.js 20.9 or newer and npm
@@ -16,7 +18,8 @@ APP SURVEY is a Next.js web app with email-and-password authentication, USDT-den
 4. In Supabase SQL Editor, run [`supabase/schema.sql`](supabase/schema.sql).
 5. In Supabase Dashboard > Authentication settings, enable the Email provider. Signup uses the server-only Admin API to mark the supplied email confirmed and create a session immediately, so no confirmation email is sent. The email address is not verified as belonging to the registrant. The mobile number remains a required contact field and is not used for authentication.
 6. Because the original schema may already be installed, run [`supabase/migrations/20261123_email_password_auth.sql`](supabase/migrations/20261123_email_password_auth.sql) in Supabase SQL Editor to add email to existing profiles and update the auth trigger.
-7. Start the website with `npm run dev`, then open `http://localhost:3000`.
+7. Run [`supabase/migrations/20261124_app_surveys_usdt_rewards.sql`](supabase/migrations/20261124_app_surveys_usdt_rewards.sql) in Supabase SQL Editor to add task survey questions/answers and the admin-selected approval reward RPC.
+8. Start the website with `npm run dev`, then open `http://localhost:3000`.
 
 Supabase database and storage requests are made by the Next.js server. The browser only connects to this website's `/api` endpoints, including for realtime chat events. The Supabase URL and keys are not in the client bundle. The server still needs the URL and keys in its deployment environment.
 
@@ -34,7 +37,7 @@ This should be done by the project owner through the trusted Supabase dashboard,
 
 ## Fund rewards
 
-Before approving any task rewards, an administrator must record available platform/client funding in Admin > Rewards > Record platform funding. This is a back-office record of money already received, not a user deposit. The database refuses reward approvals that exceed recorded available funding. Do not advertise earnings unless task terms and funding are real and available.
+Before approving any task rewards, an administrator must record available platform/client funding in Admin > Rewards > Record platform funding. This is a back-office record of money already received, not a user deposit. The admin reviews the required app survey and chooses the USDT amount to credit; approval adds that amount to the wallet through the immutable transaction ledger. The database refuses credits above recorded available funding or the daily approved-task limit. Users can request withdrawal after reaching the admin-configured minimum, and an admin must approve each request.
 
 Set the default task reward, daily approved-task limit, and minimum withdrawal in Admin > Rewards. A task's reward is fixed when the task is created. Daily limits are enforced at approval time. Every approved reward and withdrawal hold/refund is recorded in `transactions`; balances are derived from that ledger, not directly edited.
 
