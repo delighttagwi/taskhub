@@ -6,15 +6,16 @@ export async function GET() {
   const profile = await getCurrentProfile();
   if (!profile) return jsonError('Sign in to continue.', 401);
   const db = getAdminClient();
-  const [tasks, submissions, wallet, transactions, permission, messages] = await Promise.all([
+  const [tasks, submissions, wallet, transactions, permission, messages, settings] = await Promise.all([
     db.from('tasks').select('id, name, description, download_url, instructions, reward, min_duration_minutes, survey_questions').eq('is_active', true).order('created_at', { ascending: false }),
     db.from('submissions').select('id, task_id, status, reward_amount, decision_reason, created_at, tasks(name)').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(10),
     db.from('wallet_balances').select('balance').eq('user_id', profile.id).maybeSingle(),
     db.from('transactions').select('id, kind, amount, description, created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(10),
     db.from('chat_permissions').select('status').eq('user_id', profile.id).maybeSingle(),
     db.from('messages').select('id, sender_id, body, read_at, created_at').eq('user_id', profile.id).order('created_at', { ascending: true }).limit(100),
+    db.from('settings').select('key, value').in('key', ['minimum_withdrawal', 'points_per_usdt']),
   ]);
-  const failed = [tasks, submissions, wallet, transactions, permission, messages].find((result) => result.error);
+  const failed = [tasks, submissions, wallet, transactions, permission, messages, settings].find((result) => result.error);
   if (failed?.error) return jsonError('Could not load your dashboard.', 500);
   if (permission.data?.status === 'unlocked') {
     await db.from('messages').update({ read_at: new Date().toISOString() })
@@ -28,6 +29,7 @@ export async function GET() {
     transactions: transactions.data,
     chat: permission.data?.status ?? 'locked',
     messages: messages.data,
+    settings: settings.data,
   });
 }
 

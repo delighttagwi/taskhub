@@ -97,11 +97,13 @@ export async function POST(request: Request) {
     const reward = Number(body.reward);
     const dailyLimit = Number(body.dailyLimit);
     const minimumWithdrawal = Number(body.minimumWithdrawal);
-    if (![reward, dailyLimit, minimumWithdrawal].every(Number.isFinite) || reward <= 0 || dailyLimit < 1 || minimumWithdrawal <= 0) return jsonError('Enter positive reward settings and a daily task limit.');
+    const pointsPerUsdt = Number(body.pointsPerUsdt);
+    if (![reward, dailyLimit, minimumWithdrawal, pointsPerUsdt].every(Number.isFinite) || reward <= 0 || dailyLimit < 1 || minimumWithdrawal <= 0 || pointsPerUsdt <= 0) return jsonError('Enter positive point rewards, a daily limit, minimum withdrawal, and points-per-USDT rate.');
     const updates = [
       { key: 'reward_per_task', value: reward },
       { key: 'daily_task_limit', value: dailyLimit },
       { key: 'minimum_withdrawal', value: minimumWithdrawal },
+      { key: 'points_per_usdt', value: pointsPerUsdt },
     ];
     const { error } = await db.from('settings').upsert(updates, { onConflict: 'key' });
     if (error) return jsonError('Could not update reward settings.');

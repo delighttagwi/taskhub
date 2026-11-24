@@ -12,3 +12,4 @@
 @media(max-width:680px){.public-nav-actions{gap:10px}.public-nav-actions .install-button{min-height:31px;padding:0 8px;font-size:9px}.top-actions .install-button{width:32px;min-height:32px;padding:0;font-size:0}.top-actions .install-button>span{font-size:17px}}
 .admin-task-form label:nth-child(5),.submit-form .survey-question{grid-column:span 2}.survey-answers{display:flex;flex-direction:column;gap:8px;margin:12px 0}.survey-answers>div{padding:10px 12px;background:#f5f8f6}.survey-answers b{font-size:10px;color:#425962}.survey-answers p{font-size:10px;line-height:1.55;color:#66777d;margin:6px 0 0}
 @media(max-width:680px){.admin-task-form label:nth-child(5),.submit-form .survey-question{grid-column:auto}}
+.review-credit{display:flex;flex-direction:column;gap:5px;font-size:9px;color:#6d7e83}.review-credit input{width:125px;padding:7px 8px;border:1px solid #dfe7e7;background:#fff;color:var(--ink);font-size:11px}
