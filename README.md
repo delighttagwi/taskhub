@@ -1,6 +1,6 @@
 # APP SURVEY
 
-APP SURVEY is a Next.js web app with email-and-password authentication, USDT-denominated rewards and withdrawals, member and admin portals, private screenshot submissions, a funded rewards ledger, and admin-promoted private messaging. Mobile numbers remain required contact details on signup.
+APP SURVEY is a Next.js web app with email-and-password authentication, USDT-denominated virtual rewards and manual withdrawals, member and admin portals, private screenshot submissions, an audited wallet ledger, and admin-promoted private messaging. Mobile numbers remain required contact details on signup.
 
 The site includes a PWA manifest, install icon, service worker, and an install button. Install prompts are browser-controlled and appear only when supported; on iOS, use Share > Add to Home Screen. Install features require HTTPS or localhost.
 
@@ -37,7 +37,7 @@ This should be done by the project owner through the trusted Supabase dashboard,
 
 ## Fund rewards
 
-Before approving any task rewards, an administrator must record available platform/client funding in Admin > Rewards > Record platform funding. This is a back-office record of money already received, not a user deposit. The admin reviews the required app survey and chooses the USDT amount to credit; approval adds that amount to the wallet through the immutable transaction ledger. The database refuses credits above recorded available funding or the daily approved-task limit. Users can request withdrawal after reaching the admin-configured minimum, and an admin must approve each request.
+The admin reviews the required app survey and chooses the USDT amount to credit; approval adds that amount to the wallet through the immutable transaction ledger. Before approval, an administrator must record received client/platform funding in Admin > Rewards > Funding log; the database blocks credits beyond recorded, unspent funding. Daily approved-task limits also apply. Users can request manual withdrawal after reaching the admin-configured minimum, and an admin must approve each request. Registration remains free; do not require users to deposit money to unlock tasks or rewards.
 
 Set the default task reward, daily approved-task limit, and minimum withdrawal in Admin > Rewards. A task's reward is fixed when the task is created. Daily limits are enforced at approval time. Every approved reward and withdrawal hold/refund is recorded in `transactions`; balances are derived from that ledger, not directly edited.
 
@@ -46,7 +46,7 @@ Set the default task reward, daily approved-task limit, and minimum withdrawal i
 1. Push the project to a private or public Git repository and import it into Vercel (or another Next.js host).
 2. Configure `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` as server environment variables for Preview and Production. Do not expose the service-role key to client-side code.
 3. Deploy, configure the site domain, and set Supabase Auth's allowed site URL.
-4. Verify email/password signup, login and contact-phone storage, screenshot upload, admin approval, withdrawal reserve/refund, funding limits, account suspension, chat promotion/revocation, and realtime messaging in the deployed environment.
+4. Verify email/password signup, login and contact-phone storage, screenshot upload, survey answers, virtual reward crediting, withdrawal reserve/refund and approval, account suspension, chat promotion/revocation, and realtime messaging in the deployed environment.
 
 ## Important operational notes
 
