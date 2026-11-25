@@ -23,11 +23,13 @@ create table if not exists public.tasks (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   description text not null,
-  download_url text not null check (download_url like 'https://%'),
-  instructions text not null,
+  download_url text check (download_url like 'https://%' or download_url is null),
+  task_type text not null default 'app' check (task_type in ('app', 'survey')),
+  image_url text,
+  instructions text,
   survey_questions jsonb not null default '[]'::jsonb check (jsonb_typeof(survey_questions) = 'array'),
   reward numeric(12,2) not null check (reward > 0),
-  min_duration_minutes integer not null default 10 check (min_duration_minutes >= 10),
+  min_duration_minutes integer not null default 10 check (min_duration_minutes >= 0),
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
@@ -36,10 +38,9 @@ create table if not exists public.submissions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles(id),
   task_id uuid not null references public.tasks(id),
-  screenshot_path text not null,
-  details text not null,
-  survey_answers jsonb not null default '[]'::jsonb check (jsonb_typeof(survey_answers) = 'array'),
-  duration_minutes integer not null check (duration_minutes >= 10),
+  screenshot_path text,
+  details text,
+  duration_minutes integer check (duration_minutes is null or duration_minutes >= 10),
   reward_amount numeric(12,2) not null check (reward_amount > 0),
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   decision_reason text,
@@ -94,7 +95,8 @@ create table if not exists public.messages (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles(id) on delete cascade,
   sender_id uuid not null references public.profiles(id),
-  body text not null check (char_length(body) between 1 and 2000),
+  body text check (char_length(body) between 1 and 2000),
+  image_url text,
   read_at timestamptz,
   created_at timestamptz not null default now()
 );
@@ -295,7 +297,7 @@ revoke all on function public.request_withdrawal(uuid, numeric, text) from publi
 revoke all on function public.review_submission(uuid, uuid, boolean, text, numeric) from public, anon, authenticated;
 revoke all on function public.review_withdrawal(uuid, uuid, boolean, text) from public, anon, authenticated;
 revoke all on function public.record_platform_funding(uuid, numeric, text) from public, anon, authenticated;
-grant execute on function public.request_withdrawal(uuid, numeric, text) to service_role;
+grant execute on function public.request_withwithdrawal(uuid, numeric, text) to service_role;
 grant execute on function public.review_submission(uuid, uuid, boolean, text, numeric) to service_role;
 grant execute on function public.review_withdrawal(uuid, uuid, boolean, text) to service_role;
 grant execute on function public.record_platform_funding(uuid, numeric, text) to service_role;
@@ -303,6 +305,14 @@ grant execute on function public.record_platform_funding(uuid, numeric, text) to
 insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
 values ('proofs', 'proofs', false, 8388608, array['image/png', 'image/jpeg', 'image/webp'])
 on conflict (id) do update set public = false, file_size_limit = 8388608,
+  allowed_mime_types = array['image/png', 'image/jpeg', 'image/webp'];
+insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
+values ('task-images', 'task-images', true, 5242880, array['image/png', 'image/jpeg', 'image/webp'])
+on conflict (id) do update set public = true, file_size_limit = 5242880,
+  allowed_mime_types = array['image/png', 'image/jpeg', 'image/webp'];
+insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
+values ('chat-images', 'chat-images', true, 8388608, array['image/png', 'image/jpeg', 'image/webp'])
+on conflict (id) do update set public = true, file_size_limit = 8388608,
   allowed_mime_types = array['image/png', 'image/jpeg', 'image/webp'];
 create policy "Users upload own proof images" on storage.objects for insert to authenticated
   with check (bucket_id = 'proofs' and (storage.foldername(name))[1] = auth.uid()::text);

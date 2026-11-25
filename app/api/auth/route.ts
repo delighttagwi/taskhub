@@ -32,6 +32,7 @@ export async function POST(request: Request) {
     const email = String(body.email ?? '').trim().toLowerCase();
     const phone = String(body.phone ?? '').trim();
     const password = String(body.password ?? '');
+    const referralCode = String(body.referralCode ?? '').trim();
     const supabase = getAuthClient();
 
     if (action === 'register' || action === 'login') {
@@ -53,6 +54,12 @@ export async function POST(request: Request) {
       }
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error || !data.session) return jsonError('Could not sign in with that email and password.', 401);
+      if (action === 'register' && referralCode) {
+        await getAdminClient().rpc('apply_referral', {
+          p_user_id: data.session.user.id,
+          p_referral_code: referralCode,
+        });
+      }
       const cookieStore = await cookies();
       cookieStore.set('app-survey-session', data.session.access_token, {
         httpOnly: true,

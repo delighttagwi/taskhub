@@ -6,16 +6,23 @@ export async function GET() {
   const profile = await getCurrentProfile();
   if (!profile) return jsonError('Sign in to continue.', 401);
   const db = getAdminClient();
-  const [tasks, submissions, wallet, transactions, permission, messages, settings] = await Promise.all([
-    db.from('tasks').select('id, name, description, download_url, instructions, reward, min_duration_minutes, survey_questions').eq('is_active', true).order('created_at', { ascending: false }),
+  const memberLevel = Number(profile.level ?? 1);
+  await db.rpc('hide_expired_tasks');
+  let tasks: any = await db.from('tasks').select('id, name, description, download_url, instructions, reward, min_duration_minutes, survey_questions, level, closes_at').eq('is_active', true).lte('level', memberLevel).or(`closes_at.is.null,closes_at.gt.${new Date().toISOString()}`).order('created_at', { ascending: false });
+  if (tasks.error?.code === '42703' || tasks.error?.code === 'PGRST204') {
+    tasks = await db.from('tasks').select('id, name, description, download_url, instructions, reward, min_duration_minutes, survey_questions').eq('is_active', true).order('created_at', { ascending: false });
+  }
+  const [submissions, wallet, transactions, permission, messages, settings] = await Promise.all([
     db.from('submissions').select('id, task_id, status, reward_amount, decision_reason, created_at, tasks(name)').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(10),
     db.from('wallet_balances').select('balance').eq('user_id', profile.id).maybeSingle(),
     db.from('transactions').select('id, kind, amount, description, created_at').eq('user_id', profile.id).order('created_at', { ascending: false }).limit(10),
     db.from('chat_permissions').select('status').eq('user_id', profile.id).maybeSingle(),
-    db.from('messages').select('id, sender_id, body, read_at, created_at').eq('user_id', profile.id).order('created_at', { ascending: true }).limit(100),
+    db.from('messages').select('id, sender_id, body, image_url, read_at, created_at').eq('user_id', profile.id).order('created_at', { ascending: true }).limit(100),
     db.from('settings').select('key, value').in('key', ['minimum_withdrawal', 'points_per_usdt']),
   ]);
-  const failed = [tasks, submissions, wallet, transactions, permission, messages, settings].find((result) => result.error);
+  let notice: any = await db.from('app_notices').select('id, message, image_url').eq('is_active', true).order('created_at', { ascending: false }).limit(1);
+  if (notice.error?.code === '42P01' || notice.error?.code === 'PGRST205') notice = { data: [] };
+  const failed = [tasks, submissions, wallet, transactions, permission, messages, settings, notice].find((result) => result.error);
   if (failed?.error) return jsonError('Could not load your dashboard.', 500);
   if (permission.data?.status === 'unlocked') {
     await db.from('messages').update({ read_at: new Date().toISOString() })
@@ -30,6 +37,7 @@ export async function GET() {
     chat: permission.data?.status ?? 'locked',
     messages: messages.data,
     settings: settings.data,
+    notice: notice.data?.[0] ?? null,
   });
 }
 
@@ -45,12 +53,24 @@ export async function POST(request: Request) {
     const details = String(form.get('details') ?? '').trim();
     const duration = Number(form.get('duration') ?? 0);
     const proof = form.get('proof');
+    const { data: task, error: taskError } = await db.from('tasks').select('id, reward, min_duration_minutes, survey_questions, closes_at').eq('id', taskId).eq('is_active', true).single();
+    if (taskError || !task) return jsonError('This task is no longer available.', 404);
+    if (task.closes_at && new Date(task.closes_at).getTime() <= Date.now()) {
+      await db.from('tasks').update({ is_active: false }).eq('id', taskId);
+      return jsonError('This survey is closed.', 410);
+    }
+
+    let screenshotPath: string | null = null;
     if (!(proof instanceof File) || proof.size < 1 || proof.size > 8 * 1024 * 1024) return jsonError('Upload a screenshot no larger than 8 MB.');
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(proof.type)) return jsonError('Screenshot must be a PNG, JPG or WebP image.');
-    const { data: task, error: taskError } = await db.from('tasks').select('id, reward, min_duration_minutes, survey_questions').eq('id', taskId).eq('is_active', true).single();
-    if (taskError || !task) return jsonError('This task is no longer available.', 404);
     if (duration < task.min_duration_minutes) return jsonError(`This task requires at least ${task.min_duration_minutes} minutes of testing.`);
     if (details.length < 10) return jsonError('Add a few details about your testing session.');
+    if (proof instanceof File && proof.size > 0) {
+      const extension = proof.type === 'image/jpeg' ? 'jpg' : proof.type.split('/')[1];
+      screenshotPath = `${profile.id}/${crypto.randomUUID()}.${extension}`;
+      const { error: uploadError } = await db.storage.from('proofs').upload(screenshotPath, Buffer.from(await proof.arrayBuffer()), { contentType: proof.type, upsert: false });
+      if (uploadError) return jsonError('Screenshot upload failed. Try again.', 500);
+    }
     const questions = Array.isArray(task.survey_questions) ? task.survey_questions as string[] : [];
     const surveyAnswers = questions.map((question, index) => ({
       question,
@@ -58,16 +78,14 @@ export async function POST(request: Request) {
     }));
     if (surveyAnswers.some(({ answer }) => answer.length < 2)) return jsonError('Answer each app survey question before submitting.');
 
-    const extension = proof.type === 'image/jpeg' ? 'jpg' : proof.type.split('/')[1];
-    const path = `${profile.id}/${crypto.randomUUID()}.${extension}`;
-    const { error: uploadError } = await db.storage.from('proofs').upload(path, Buffer.from(await proof.arrayBuffer()), { contentType: proof.type, upsert: false });
-    if (uploadError) return jsonError('Screenshot upload failed. Try again.', 500);
     const { error } = await db.from('submissions').insert({
-      user_id: profile.id, task_id: task.id, screenshot_path: path, details,
-      duration_minutes: duration, reward_amount: task.reward, survey_answers: surveyAnswers,
+      user_id: profile.id, task_id: task.id, screenshot_path: screenshotPath,
+      details,
+      duration_minutes: duration,
+      reward_amount: task.reward,
     });
     if (error) {
-      await db.storage.from('proofs').remove([path]);
+      if (screenshotPath) await db.storage.from('proofs').remove([screenshotPath]);
       return jsonError(error.code === '23505' ? 'You already submitted this task.' : 'Could not save your submission.');
     }
     return Response.json({ ok: true });
@@ -84,11 +102,34 @@ export async function POST(request: Request) {
 
   if (action === 'send-message') {
     const body = String(form.get('body') ?? '').trim();
-    if (!body || body.length > 2000) return jsonError('Messages must be between 1 and 2,000 characters.');
+    const image = form.get('image');
+    if (!body && (!(image instanceof File) || image.size < 1)) return jsonError('Enter a message or attach an image.');
+    if (body.length > 2000) return jsonError('Messages must be no more than 2,000 characters.');
+    if (image instanceof File && image.size > 8 * 1024 * 1024) return jsonError('Chat images must be 8 MB or smaller.');
+    if (image instanceof File && image.size > 0 && !['image/png', 'image/jpeg', 'image/webp'].includes(image.type)) return jsonError('Chat images must be PNG, JPG or WebP.');
     const { data: access } = await db.from('chat_permissions').select('status').eq('user_id', profile.id).maybeSingle();
     if (access?.status !== 'unlocked') return jsonError('Private chat access is locked.', 403);
-    const { error } = await db.from('messages').insert({ user_id: profile.id, sender_id: profile.id, body });
-    if (error) return jsonError('Could not send your message.', 500);
+
+    let imageUrl: string | null = null;
+    let imagePath: string | null = null;
+    if (image instanceof File && image.size > 0) {
+      const extension = image.type === 'image/jpeg' ? 'jpg' : image.type.split('/')[1];
+      imagePath = `${profile.id}/${crypto.randomUUID()}.${extension}`;
+      const { error: uploadError } = await db.storage.from('chat-images').upload(imagePath, Buffer.from(await image.arrayBuffer()), { contentType: image.type, upsert: false });
+      if (uploadError) return jsonError('Could not upload the chat image. Try again.', 500);
+      imageUrl = db.storage.from('chat-images').getPublicUrl(imagePath).data.publicUrl;
+    }
+
+    const { error } = await db.from('messages').insert({
+      user_id: profile.id,
+      sender_id: profile.id,
+      body: body || null,
+      image_url: imageUrl,
+    });
+    if (error) {
+      if (imagePath) await db.storage.from('chat-images').remove([imagePath]);
+      return jsonError('Could not send your message.', 500);
+    }
     return Response.json({ ok: true });
   }
 

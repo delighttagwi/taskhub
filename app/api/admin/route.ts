@@ -12,24 +12,34 @@ export async function GET() {
   const admin = await getAdmin();
   if (!admin) return jsonError('Administrator access required.', 403);
   const db = getAdminClient();
-  const [users, tasks, submissions, withdrawals, settings, funding, earnings] = await Promise.all([
-    db.from('profiles').select('id, full_name, email, phone, role, status, created_at, chat_permissions!chat_permissions_user_id_fkey(status)').order('created_at', { ascending: false }).limit(200),
+
+  let users: any = await db.from('profiles').select('id, full_name, email, phone, role, status, level, referral_code, referred_by, created_at, chat_permissions!chat_permissions_user_id_fkey(status)').order('created_at', { ascending: false }).limit(200);
+  if (users.error?.code === '42703' || users.error?.code === 'PGRST204') {
+    users = await db.from('profiles').select('id, full_name, email, phone, role, status, created_at, chat_permissions!chat_permissions_user_id_fkey(status)').order('created_at', { ascending: false }).limit(200);
+  }
+
+  const [tasks, submissions, withdrawals, settings, funding, earnings] = await Promise.all([
     db.from('tasks').select('*').order('created_at', { ascending: false }),
-    db.from('submissions').select('id, user_id, task_id, screenshot_path, details, survey_answers, duration_minutes, reward_amount, status, created_at, profiles!submissions_user_id_fkey(full_name, email, phone), tasks(name)').eq('status', 'pending').order('created_at', { ascending: true }),
+    db.from('submissions').select('id, user_id, task_id, screenshot_path, details, duration_minutes, reward_amount, status, created_at, profiles!submissions_user_id_fkey(full_name, email, phone), tasks(name)').eq('status', 'pending').order('created_at', { ascending: true }),
     db.from('withdrawals').select('id, user_id, amount, payout_details, status, created_at, profiles!withdrawals_user_id_fkey(full_name, email, phone)').eq('status', 'pending').order('created_at', { ascending: true }),
     db.from('settings').select('key, value'),
     db.from('funding_ledger').select('amount, note, created_at').order('created_at', { ascending: false }).limit(50),
     db.from('transactions').select('user_id, amount').eq('kind', 'task_reward'),
   ]);
-  const error = [users, tasks, submissions, withdrawals, settings, funding, earnings].find((result) => result.error)?.error;
+
+  let notices: any = await db.from('app_notices').select('id, message, image_url, is_active, created_at').eq('is_active', true).order('created_at', { ascending: false }).limit(1);
+  if (notices.error?.code === '42P01' || notices.error?.code === 'PGRST205') notices = { data: [] };
+
+  const error = [users, tasks, submissions, withdrawals, settings, funding, earnings, notices].find((result) => result.error)?.error;
   if (error) return jsonError('Could not load the admin dashboard.', 500);
-  const reviewQueue = await Promise.all((submissions.data ?? []).map(async (submission) => {
+  const reviewQueue = await Promise.all((submissions.data ?? []).map(async (submission: any) => {
+    if (!submission.screenshot_path) return { ...submission, screenshot_url: null };
     const { data } = await db.storage.from('proofs').createSignedUrl(submission.screenshot_path, 300);
     return { ...submission, screenshot_url: data?.signedUrl ?? null };
   }));
   const totals = new Map<string, number>();
   for (const transaction of earnings.data ?? []) totals.set(transaction.user_id, (totals.get(transaction.user_id) ?? 0) + Number(transaction.amount));
-  return Response.json({ users: (users.data ?? []).filter((user) => user.role === 'user').map((user) => ({ ...user, total_earned: totals.get(user.id) ?? 0 })), tasks: tasks.data, submissions: reviewQueue, withdrawals: withdrawals.data, settings: settings.data, funding: funding.data });
+  return Response.json({ users: (users.data ?? []).filter((user: any) => user.role === 'user').map((user: any) => ({ ...user, level: user.level ?? 1, referral_code: user.referral_code ?? '', total_earned: totals.get(user.id) ?? 0 })), tasks: tasks.data, submissions: reviewQueue, withdrawals: withdrawals.data, settings: settings.data, funding: funding.data, notices: notices.data });
 }
 
 export async function POST(request: Request) {
@@ -39,24 +49,57 @@ export async function POST(request: Request) {
   const body = await request.json();
   const action = String(body.action ?? '');
 
+  if (action === 'toggle-task') {
+    const taskId = String(body.id ?? '');
+    if (!taskId || typeof body.isActive !== 'boolean') return jsonError('Choose a task and a valid publish state.');
+    const { error } = await db.from('tasks').update({ is_active: body.isActive }).eq('id', taskId);
+    if (error) return jsonError('Could not update task publish status.');
+    return Response.json({ ok: true });
+  }
+
   if (action === 'create-task') {
     const name = String(body.name ?? '').trim();
     const description = String(body.description ?? '').trim();
     const instructions = String(body.instructions ?? '').trim();
     const downloadUrl = String(body.downloadUrl ?? '').trim();
+    const taskType = String(body.taskType ?? 'app') === 'survey' ? 'survey' : 'app';
     const reward = Number(body.reward);
     const duration = Number(body.duration ?? 10);
     const surveyQuestions = Array.isArray(body.surveyQuestions)
       ? body.surveyQuestions.map((question: unknown) => String(question).trim()).filter(Boolean)
       : [];
+    const level = Math.trunc(Number(body.level ?? 1));
+    const closesAt = String(body.closesAt ?? '').trim();
     try {
-      if (new URL(downloadUrl).protocol !== 'https:') return jsonError('Task links must use HTTPS.');
+      if (taskType === 'app') {
+        if (new URL(downloadUrl).protocol !== 'https:') return jsonError('Task links must use HTTPS.');
+      }
     } catch { return jsonError('Enter a valid HTTPS task link.'); }
-    if (name.length < 2 || !description || !instructions || !Number.isFinite(reward) || reward <= 0 || !Number.isInteger(duration) || duration < 10) return jsonError('Complete the task details with a reward and at least 10 minutes of testing.');
+    if (taskType === 'app' && (!instructions || !Number.isInteger(duration) || duration < 10)) return jsonError('App tasks require testing instructions and at least 10 minutes.');
+    if (name.length < 2 || !description || !Number.isFinite(reward) || reward <= 0) return jsonError('Complete the task details with a positive USDT reward.');
     if (surveyQuestions.length < 1 || surveyQuestions.length > 20 || surveyQuestions.some((question: string) => question.length < 5 || question.length > 300)) return jsonError('Add 1 to 20 survey questions, each between 5 and 300 characters.');
-    const { error } = await db.from('tasks').insert({ name, description, instructions, download_url: downloadUrl, reward, min_duration_minutes: duration, survey_questions: surveyQuestions });
+    if (level < 1 || level > 5) return jsonError('Choose a task level from 1 to 5.');
+    if (closesAt) {
+      const closeDate = new Date(closesAt);
+      if (Number.isNaN(closeDate.getTime()) || closeDate.getTime() <= Date.now()) return jsonError('Choose a valid future close date and time.');
+    }
+    let { error } = await db.from('tasks').insert({
+      name, description, task_type: taskType,
+      instructions: taskType === 'app' ? instructions : null,
+      download_url: taskType === 'app' ? downloadUrl : null,
+      reward, min_duration_minutes: taskType === 'app' ? duration : 0,
+      survey_questions: surveyQuestions,
+      level,
+      closes_at: closesAt ? new Date(closesAt).toISOString() : null,
+    });
+    if (error?.code === '42703' || error?.code === 'PGRST204') {
+      ({ error } = await db.from('tasks').insert({
+        name, description, instructions, download_url: downloadUrl,
+        reward, min_duration_minutes: duration,
+        survey_questions: surveyQuestions,
+      }));
+    }
     if (error) return jsonError('Could not create the task.');
-    return Response.json({ ok: true });
   }
 
   if (action === 'review-submission') {
@@ -97,13 +140,11 @@ export async function POST(request: Request) {
     const reward = Number(body.reward);
     const dailyLimit = Number(body.dailyLimit);
     const minimumWithdrawal = Number(body.minimumWithdrawal);
-    const pointsPerUsdt = Number(body.pointsPerUsdt);
-    if (![reward, dailyLimit, minimumWithdrawal, pointsPerUsdt].every(Number.isFinite) || reward <= 0 || dailyLimit < 1 || minimumWithdrawal <= 0 || pointsPerUsdt <= 0) return jsonError('Enter positive point rewards, a daily limit, minimum withdrawal, and points-per-USDT rate.');
+    if (![reward, dailyLimit, minimumWithdrawal].every(Number.isFinite) || reward <= 0 || dailyLimit < 1 || minimumWithdrawal <= 0) return jsonError('Enter positive USDT rewards, a daily limit, and minimum withdrawal.');
     const updates = [
       { key: 'reward_per_task', value: reward },
       { key: 'daily_task_limit', value: dailyLimit },
       { key: 'minimum_withdrawal', value: minimumWithdrawal },
-      { key: 'points_per_usdt', value: pointsPerUsdt },
     ];
     const { error } = await db.from('settings').upsert(updates, { onConflict: 'key' });
     if (error) return jsonError('Could not update reward settings.');
@@ -118,5 +159,50 @@ export async function POST(request: Request) {
     return Response.json({ ok: true });
   }
 
-  return jsonError('Unknown admin action.');
+  if (action === 'upgrade-user-level') {
+    const userId = String(body.userId ?? '');
+    const level = Number(body.level);
+    if (!userId || level < 1 || level > 5) return jsonError('Choose a user and Level 1 to 5.');
+    const { error } = await db.rpc('upgrade_user_level', { p_admin_id: admin.id, p_user_id: userId, p_level: level });
+    if (error) return jsonError(error.message);
+    return Response.json({ ok: true });
+  }
+
+  if (action === 'update-referral-settings') {
+    const referralReward = Number(body.referralReward);
+    const level2 = Number(body.level2Reward);
+    const level3 = Number(body.level3Reward);
+    const level4 = Number(body.level4Reward);
+    const level5 = Number(body.level5Reward);
+    const values = [referralReward, level2, level3, level4, level5];
+    if (!values.every((value) => Number.isFinite(value) && value >= 0)) return jsonError('Referral rewards must be zero or positive.');
+    const updates = [
+      { key: 'referral_signup_reward', value: referralReward },
+      { key: 'level_2_upgrade_reward', value: level2 },
+      { key: 'level_3_upgrade_reward', value: level3 },
+      { key: 'level_4_upgrade_reward', value: level4 },
+      { key: 'level_5_upgrade_reward', value: level5 },
+    ];
+    const { error } = await db.from('settings').upsert(updates, { onConflict: 'key' });
+    if (error) return jsonError('Could not update referral rewards.');
+    return Response.json({ ok: true });
+  }
+
+  if (action === 'publish-notice') {
+    const message = String(body.message ?? '').trim();
+    const imageUrl = String(body.imageUrl ?? '').trim();
+    if (!message && !imageUrl) return jsonError('Enter a notice message or image URL.');
+    await db.from('app_notices').update({ is_active: false }).neq('id', '00000000-0000-0000-0000-000000000000');
+    const { error } = await db.from('app_notices').insert({ message: message || null, image_url: imageUrl || null, is_active: true, created_by: admin.id });
+    if (error) return jsonError('Could not publish the notice.');
+    return Response.json({ ok: true });
+  }
+
+  if (action === 'remove-notice') {
+    const { error } = await db.from('app_notices').update({ is_active: false }).eq('is_active', true);
+    if (error) return jsonError('Could not remove the notice.');
+    return Response.json({ ok: true });
+  }
+
+  return jsonError('Unknown action.');
 }

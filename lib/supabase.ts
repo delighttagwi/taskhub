@@ -42,13 +42,20 @@ export async function getCurrentProfile() {
   }
   if (authError || !authData.user) return null;
 
-  const { data: profile, error } = await supabase
+  let { data: profile, error } = await supabase
     .from('profiles')
-    .select('id, full_name, email, phone, role, status')
+    .select('id, full_name, email, phone, role, status, level, referral_code')
     .eq('id', authData.user.id)
     .single();
+  if (error?.code === '42703' || error?.code === 'PGRST204') {
+    ({ data: profile, error } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, phone, role, status')
+      .eq('id', authData.user.id)
+      .single());
+  }
   if (error || !profile || profile.status !== 'active') return null;
-  return profile;
+  return { ...profile, level: profile.level ?? 1, referral_code: profile.referral_code ?? '' };
 }
 
 export function jsonError(message: string, status = 400) {
