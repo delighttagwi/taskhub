@@ -13,39 +13,125 @@ export async function GET() {
   if (!admin) return jsonError('Administrator access required.', 403);
   const db = getAdminClient();
 
-  let users: any = await db.from('profiles').select('id, full_name, email, phone, role, status, level, referral_code, referred_by, created_at, chat_permissions!chat_permissions_user_id_fkey(status)').order('created_at', { ascending: false }).limit(200);
-  if (users.error?.code === '42703' || users.error?.code === 'PGRST204') {
-    users = await db.from('profiles').select('id, full_name, email, phone, role, status, created_at, chat_permissions!chat_permissions_user_id_fkey(status)').order('created_at', { ascending: false }).limit(200);
+  const profileFields = 'id, full_name, email, phone, role, status, level, referral_code, referred_by, created_at, chat_permissions!chat_permissions_user_id_fkey(status)';
+  const legacyProfileFields = 'id, full_name, email, phone, role, status, created_at, chat_permissions!chat_permissions_user_id_fkey(status)';
+  const allUsers: any[] = [];
+  let userError: any = null;
+  for (let offset = 0; ; offset += 1000) {
+    let batch: any = await db.from('profiles').select(profileFields).order('created_at', { ascending: false }).order('id', { ascending: false }).range(offset, offset + 999);
+    if (batch.error?.code === '42703' || batch.error?.code === 'PGRST204') {
+      batch = await db.from('profiles').select(legacyProfileFields).order('created_at', { ascending: false }).order('id', { ascending: false }).range(offset, offset + 999);
+    }
+    if (batch.error) {
+      userError = batch.error;
+      break;
+    }
+    allUsers.push(...(batch.data ?? []));
+    if ((batch.data ?? []).length < 1000) break;
   }
+  const users = { data: allUsers, error: userError };
 
-  const [tasks, submissions, withdrawals, settings, funding, earnings] = await Promise.all([
+  const [tasks, submissions, withdrawals, settings, funding] = await Promise.all([
     db.from('tasks').select('*').order('created_at', { ascending: false }),
-    db.from('submissions').select('id, user_id, task_id, screenshot_path, details, duration_minutes, reward_amount, status, created_at, profiles!submissions_user_id_fkey(full_name, email, phone), tasks(name)').eq('status', 'pending').order('created_at', { ascending: true }),
+    db.from('submissions').select('id, user_id, task_id, screenshot_path, details, duration_minutes, survey_answers, reward_amount, status, created_at, profiles!submissions_user_id_fkey(full_name, email, phone), tasks(name)').eq('status', 'pending').order('created_at', { ascending: true }),
     db.from('withdrawals').select('id, user_id, amount, payout_details, status, created_at, profiles!withdrawals_user_id_fkey(full_name, email, phone)').eq('status', 'pending').order('created_at', { ascending: true }),
     db.from('settings').select('key, value'),
     db.from('funding_ledger').select('amount, note, created_at').order('created_at', { ascending: false }).limit(50),
-    db.from('transactions').select('user_id, amount').eq('kind', 'task_reward'),
   ]);
+
+  const transactions: any[] = [];
+  let transactionError: any = null;
+  for (let offset = 0; ; offset += 1000) {
+    const batch = await db.from('transactions').select('id, user_id, amount, kind, created_at').order('id', { ascending: true }).range(offset, offset + 999);
+    if (batch.error) {
+      transactionError = batch.error;
+      break;
+    }
+    transactions.push(...(batch.data ?? []));
+    if ((batch.data ?? []).length < 1000) break;
+  }
 
   let notices: any = await db.from('app_notices').select('id, message, image_url, is_active, created_at').eq('is_active', true).order('created_at', { ascending: false }).limit(1);
   if (notices.error?.code === '42P01' || notices.error?.code === 'PGRST205') notices = { data: [] };
 
-  const error = [users, tasks, submissions, withdrawals, settings, funding, earnings, notices].find((result) => result.error)?.error;
+  const error = [users, tasks, submissions, withdrawals, settings, funding, { error: transactionError }, notices].find((result) => result.error)?.error;
   if (error) return jsonError('Could not load the admin dashboard.', 500);
   const reviewQueue = await Promise.all((submissions.data ?? []).map(async (submission: any) => {
     if (!submission.screenshot_path) return { ...submission, screenshot_url: null };
     const { data } = await db.storage.from('proofs').createSignedUrl(submission.screenshot_path, 300);
     return { ...submission, screenshot_url: data?.signedUrl ?? null };
   }));
-  const totals = new Map<string, number>();
-  for (const transaction of earnings.data ?? []) totals.set(transaction.user_id, (totals.get(transaction.user_id) ?? 0) + Number(transaction.amount));
-  return Response.json({ users: (users.data ?? []).filter((user: any) => user.role === 'user').map((user: any) => ({ ...user, level: user.level ?? 1, referral_code: user.referral_code ?? '', total_earned: totals.get(user.id) ?? 0 })), tasks: tasks.data, submissions: reviewQueue, withdrawals: withdrawals.data, settings: settings.data, funding: funding.data, notices: notices.data });
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+  const totals = new Map<string, { balance: number; earned: number; earnedToday: number }>();
+  for (const transaction of transactions) {
+    const account = totals.get(transaction.user_id) ?? { balance: 0, earned: 0, earnedToday: 0 };
+    const amount = Number(transaction.amount);
+    account.balance += amount;
+    if (transaction.kind === 'task_reward') {
+      account.earned += amount;
+      if (new Date(transaction.created_at).getTime() >= todayStart.getTime()) account.earnedToday += amount;
+    }
+    totals.set(transaction.user_id, account);
+  }
+  return Response.json({ users: (users.data ?? []).filter((user: any) => user.role === 'user').map((user: any) => {
+    const account = totals.get(user.id) ?? { balance: 0, earned: 0, earnedToday: 0 };
+    return { ...user, level: user.level ?? 1, referral_code: user.referral_code ?? '', total_earned: account.earned, total_points: account.balance, points_today: account.earnedToday };
+  }), tasks: tasks.data, submissions: reviewQueue, withdrawals: withdrawals.data, settings: settings.data, funding: funding.data, notices: notices.data });
 }
 
 export async function POST(request: Request) {
   const admin = await getAdmin();
   if (!admin) return jsonError('Administrator access required.', 403);
   const db = getAdminClient();
+
+  if (request.headers.get('content-type')?.includes('multipart/form-data')) {
+    const form = await request.formData();
+    if (String(form.get('action') ?? '') !== 'publish-notice') return jsonError('Unknown notice action.');
+    const message = String(form.get('message') ?? '').trim();
+    const image = form.get('image');
+    if (image instanceof File && image.size > 8 * 1024 * 1024) return jsonError('Notice images must be 8 MB or smaller.');
+    if (image instanceof File && image.size > 0 && !['image/png', 'image/jpeg', 'image/webp'].includes(image.type)) {
+      return jsonError('Notice images must be PNG, JPG or WebP.');
+    }
+
+    const { data: currentNotice, error: currentNoticeError } = await db.from('app_notices')
+      .select('image_url').eq('is_active', true).order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (currentNoticeError) return jsonError('Could not load the current notice.');
+
+    let imagePath: string | null = null;
+    let imageUrl: string | null = currentNotice?.image_url ?? null;
+    if (image instanceof File && image.size > 0) {
+      const extension = image.type === 'image/jpeg' ? 'jpg' : image.type.split('/')[1];
+      imagePath = `${admin.id}/${crypto.randomUUID()}.${extension}`;
+      const { error: uploadError } = await db.storage.from('notice-images').upload(imagePath, Buffer.from(await image.arrayBuffer()), {
+        contentType: image.type,
+        upsert: false,
+      });
+      if (uploadError) return jsonError('Could not upload the notice image. Check that the notice-images bucket migration has been run.', 500);
+      imageUrl = db.storage.from('notice-images').getPublicUrl(imagePath).data.publicUrl;
+    }
+    if (!message && !imageUrl) {
+      if (imagePath) await db.storage.from('notice-images').remove([imagePath]);
+      return jsonError('Add a notice message or upload an image.');
+    }
+
+    const { data: publishedNotice, error: insertError } = await db.from('app_notices').insert({
+      message: message || null,
+      image_url: imageUrl,
+      is_active: true,
+      created_by: admin.id,
+    }).select('id').single();
+    if (insertError) {
+      if (imagePath) await db.storage.from('notice-images').remove([imagePath]);
+      return jsonError('Could not publish the notice.');
+    }
+    const { error: deactivateError } = await db.from('app_notices').update({ is_active: false })
+      .eq('is_active', true).neq('id', publishedNotice.id);
+    if (deactivateError) return jsonError('The notice was published, but an older notice could not be archived.');
+    return Response.json({ ok: true });
+  }
+
   const body = await request.json();
   const action = String(body.action ?? '');
 
@@ -185,16 +271,6 @@ export async function POST(request: Request) {
     ];
     const { error } = await db.from('settings').upsert(updates, { onConflict: 'key' });
     if (error) return jsonError('Could not update referral rewards.');
-    return Response.json({ ok: true });
-  }
-
-  if (action === 'publish-notice') {
-    const message = String(body.message ?? '').trim();
-    const imageUrl = String(body.imageUrl ?? '').trim();
-    if (!message && !imageUrl) return jsonError('Enter a notice message or image URL.');
-    await db.from('app_notices').update({ is_active: false }).neq('id', '00000000-0000-0000-0000-000000000000');
-    const { error } = await db.from('app_notices').insert({ message: message || null, image_url: imageUrl || null, is_active: true, created_by: admin.id });
-    if (error) return jsonError('Could not publish the notice.');
     return Response.json({ ok: true });
   }
 

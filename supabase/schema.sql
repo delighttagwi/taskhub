@@ -40,7 +40,7 @@ create table if not exists public.submissions (
   task_id uuid not null references public.tasks(id),
   screenshot_path text,
   details text,
-  duration_minutes integer check (duration_minutes is null or duration_minutes >= 10),
+  duration_minutes integer check (duration_minutes is null or duration_minutes >= 0),
   reward_amount numeric(12,2) not null check (reward_amount > 0),
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
   decision_reason text,
