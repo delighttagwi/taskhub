@@ -58,8 +58,8 @@ export async function POST(request: Request) {
     const details = String(form.get('details') ?? '').trim();
     const duration = Number(form.get('duration') ?? 0);
     const proof = form.get('proof');
-    const { data: task, error: taskError } = await db.from('tasks').select('id, reward, min_duration_minutes, survey_questions, closes_at').eq('id', taskId).eq('is_active', true).single();
-    if (taskError || !task) return jsonError('This task is no longer available.', 404);
+    const { data: task, error: taskError } = await db.from('tasks').select('id, reward, min_duration_minutes, survey_questions, closes_at').eq('id', taskId).single();
+    if (taskError || !task) return jsonError('This task could not be found. Refresh and try again.', 404);
     if (task.closes_at && new Date(task.closes_at).getTime() <= Date.now()) {
       await db.from('tasks').update({ is_active: false }).eq('id', taskId);
       return jsonError('This survey is closed.', 410);
