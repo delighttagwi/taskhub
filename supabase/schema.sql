@@ -249,7 +249,7 @@ insert into public.settings(key, value) values
   ('currency', '"USDT"'::jsonb),
   ('reward_per_task', '50'::jsonb),
   ('daily_task_limit', '5'::jsonb),
-  ('minimum_withdrawal', '200'::jsonb),
+  ('minimum_withdrawal', '0'::jsonb),
   ('points_per_usdt', '0'::jsonb)
 on conflict (key) do nothing;
 

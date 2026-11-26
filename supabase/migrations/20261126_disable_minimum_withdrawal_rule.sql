@@ -1,4 +1,8 @@
 -- Allow administrators to disable the withdrawal minimum by setting minimum_withdrawal to 0.
+insert into public.settings(key, value)
+values ('minimum_withdrawal', '0'::jsonb)
+on conflict (key) do update set value = excluded.value;
+
 create or replace function public.request_withdrawal(p_user_id uuid, p_amount numeric, p_payout_details text)
 returns uuid language plpgsql security definer set search_path = public, pg_temp as $$
 declare
