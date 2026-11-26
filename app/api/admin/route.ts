@@ -226,7 +226,7 @@ export async function POST(request: Request) {
     const reward = Number(body.reward);
     const dailyLimit = Number(body.dailyLimit);
     const minimumWithdrawal = Number(body.minimumWithdrawal);
-    if (![reward, dailyLimit, minimumWithdrawal].every(Number.isFinite) || reward <= 0 || dailyLimit < 1 || minimumWithdrawal <= 0) return jsonError('Enter positive USDT rewards, a daily limit, and minimum withdrawal.');
+    if (![reward, dailyLimit, minimumWithdrawal].every(Number.isFinite) || reward <= 0 || dailyLimit < 1 || minimumWithdrawal < 0) return jsonError('Enter positive task rewards, a daily limit, and a withdrawal minimum of zero or more.');
     const updates = [
       { key: 'reward_per_task', value: reward },
       { key: 'daily_task_limit', value: dailyLimit },

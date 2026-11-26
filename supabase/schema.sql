@@ -166,7 +166,7 @@ begin
   perform 1 from public.wallets where user_id = p_user_id for update;
   select coalesce(sum(amount), 0) into v_balance from public.transactions where user_id = p_user_id;
   select coalesce((value #>> '{}')::numeric, 200) into v_minimum from public.settings where key = 'minimum_withdrawal';
-  if p_amount < v_minimum then raise exception 'Minimum withdrawal is USDT %.', v_minimum; end if;
+  if v_minimum > 0 and p_amount < v_minimum then raise exception 'Minimum withdrawal is USDT %.', v_minimum; end if;
   if v_points_to_hold > v_balance then raise exception 'Insufficient points balance. Required: % points.', v_points_to_hold; end if;
   insert into public.withdrawals(user_id, amount, points_amount, points_per_usdt, payout_details)
     values (p_user_id, p_amount, v_points_to_hold, v_points_per_usdt, trim(p_payout_details)) returning id into v_withdrawal_id;

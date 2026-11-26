@@ -27,7 +27,7 @@ begin
   select coalesce(sum(amount), 0) into v_balance from public.transactions where user_id = p_user_id;
   select coalesce((value #>> '{}')::numeric, 200) into v_minimum
     from public.settings where key = 'minimum_withdrawal';
-  if p_amount < v_minimum then raise exception 'Minimum withdrawal is USDT %.', v_minimum; end if;
+  if v_minimum > 0 and p_amount < v_minimum then raise exception 'Minimum withdrawal is USDT %.', v_minimum; end if;
   if p_amount > v_balance then raise exception 'Insufficient USDT balance.'; end if;
   insert into public.withdrawals(user_id, amount, points_amount, points_per_usdt, payout_details)
     values (p_user_id, p_amount, p_amount, 1, trim(p_payout_details))
